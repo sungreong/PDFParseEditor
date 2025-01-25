@@ -32,6 +32,11 @@ const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
   const [isResizing, setIsResizing] = useState(false);
   const [selectedPage, setSelectedPage] = useState<number | null>(null);
   const [showDetails, setShowDetails] = useState(false);
+  const [selectedBoxIds, setSelectedBoxIds] = useState<Set<string>>(new Set());
+  const [textLengthFilter, setTextLengthFilter] = useState<{
+    type: 'more' | 'less' | 'none';
+    value: number;
+  }>({ type: 'none', value: 0 });
 
   // 모든 페이지의 박스 정보 가져오기
   const allBoxes = useMemo(() => {
@@ -61,7 +66,14 @@ const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
       .filter(box => {
         const matchesSearch = box.text?.toLowerCase().includes(searchTerm.toLowerCase()) ?? false;
         const matchesPage = selectedPage ? box.pageNumber === selectedPage : true;
-        return matchesSearch && matchesPage;
+        const matchesLength = (() => {
+          if (textLengthFilter.type === 'none') return true;
+          const length = box.text?.length ?? 0;
+          return textLengthFilter.type === 'more' 
+            ? length >= textLengthFilter.value
+            : length <= textLengthFilter.value;
+        })();
+        return matchesSearch && matchesPage && matchesLength;
       })
       .sort((a, b) => {
         if (sortBy === 'position') {
@@ -69,7 +81,7 @@ const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
         }
         return 0;
       });
-  }, [allBoxes, searchTerm, selectedPage, sortBy]);
+  }, [allBoxes, searchTerm, selectedPage, sortBy, textLengthFilter]);
 
   const handleMouseDown = (e: React.MouseEvent) => {
     setIsResizing(true);
@@ -110,48 +122,126 @@ const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
     };
   }, [isResizing, size]);
 
+  const handleSelectBox = (boxId: string) => {
+    setSelectedBoxIds(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(boxId)) {
+        newSet.delete(boxId);
+      } else {
+        newSet.add(boxId);
+      }
+      return newSet;
+    });
+  };
+
+  const handleDeleteSelected = () => {
+    if (selectedBoxIds.size === 0) return;
+    if (window.confirm(`선택한 ${selectedBoxIds.size}개의 박스를 삭제하시겠습니까?`)) {
+      selectedBoxIds.forEach(boxId => {
+        onBoxDelete(boxId);
+      });
+      setSelectedBoxIds(new Set());
+    }
+  };
+
   const renderBoxTable = () => (
-    <table className="w-full text-xs">
-      <thead className="bg-gray-50 sticky top-0">
-        <tr>
-          <th className="px-1 py-0.5 text-left">P</th>
-          <th className="px-1 py-0.5 text-left">위치</th>
-          <th className="px-1 py-0.5 text-left">크기</th>
-          <th className="px-1 py-0.5 text-left">텍스트</th>
-          <th className="px-1 py-0.5 text-right">작업</th>
-        </tr>
-      </thead>
-      <tbody>
-        {filteredBoxes.map((box) => (
-          <tr key={box.id} className="border-b hover:bg-gray-50">
-            <td className="px-1 py-0.5">{box.pageNumber}</td>
-            <td className="px-1 py-0.5 whitespace-nowrap">
-              {Math.round(box.x)},{Math.round(box.y)}
-            </td>
-            <td className="px-1 py-0.5 whitespace-nowrap">
-              {Math.round(box.width)}×{Math.round(box.height)}
-            </td>
-            <td className="px-1 py-0.5 text-gray-500">
-              {box.text ? `${box.text.length}자` : '0자'}
-            </td>
-            <td className="px-1 py-0.5 text-right whitespace-nowrap">
-              <button
-                onClick={() => onBoxSelect(box)}
-                className="text-blue-500 hover:text-blue-700 text-xs"
-              >
-                수정
-              </button>
-              <button
-                onClick={() => onBoxDelete(box.id)}
-                className="text-red-500 hover:text-red-700 text-xs ml-1"
-              >
-                삭제
-              </button>
-            </td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
+    <div className="flex flex-col h-full">
+      <div className="flex items-center gap-2 p-1 border-b bg-gray-50">
+        <div className="flex items-center gap-1">
+          <select
+            value={textLengthFilter.type}
+            onChange={(e) => setTextLengthFilter(prev => ({ ...prev, type: e.target.value as 'more' | 'less' | 'none' }))}
+            className="px-1 py-0.5 border rounded text-xs"
+          >
+            <option value="none">텍스트 길이</option>
+            <option value="more">이상</option>
+            <option value="less">이하</option>
+          </select>
+          {textLengthFilter.type !== 'none' && (
+            <input
+              type="number"
+              value={textLengthFilter.value}
+              onChange={(e) => setTextLengthFilter(prev => ({ ...prev, value: parseInt(e.target.value) || 0 }))}
+              className="w-16 px-1 py-0.5 border rounded text-xs"
+              min="0"
+            />
+          )}
+        </div>
+        {selectedBoxIds.size > 0 && (
+          <button
+            onClick={handleDeleteSelected}
+            className="px-2 py-0.5 bg-red-100 text-red-700 rounded text-xs hover:bg-red-200"
+          >
+            {selectedBoxIds.size}개 삭제
+          </button>
+        )}
+      </div>
+      <div className="flex-1 overflow-auto">
+        <table className="w-full text-xs">
+          <thead className="bg-gray-50 sticky top-0">
+            <tr>
+              <th className="px-1 py-0.5 text-left w-8">
+                <input
+                  type="checkbox"
+                  checked={selectedBoxIds.size > 0 && selectedBoxIds.size === filteredBoxes.length}
+                  onChange={(e) => {
+                    if (e.target.checked) {
+                      setSelectedBoxIds(new Set(filteredBoxes.map(box => box.id)));
+                    } else {
+                      setSelectedBoxIds(new Set());
+                    }
+                  }}
+                  className="w-3 h-3"
+                />
+              </th>
+              <th className="px-1 py-0.5 text-left">P</th>
+              <th className="px-1 py-0.5 text-left">위치</th>
+              <th className="px-1 py-0.5 text-left">크기</th>
+              <th className="px-1 py-0.5 text-left">텍스트</th>
+              <th className="px-1 py-0.5 text-right">작업</th>
+            </tr>
+          </thead>
+          <tbody>
+            {filteredBoxes.map((box) => (
+              <tr key={box.id} className="border-b hover:bg-gray-50">
+                <td className="px-1 py-0.5">
+                  <input
+                    type="checkbox"
+                    checked={selectedBoxIds.has(box.id)}
+                    onChange={() => handleSelectBox(box.id)}
+                    className="w-3 h-3"
+                  />
+                </td>
+                <td className="px-1 py-0.5">{box.pageNumber}</td>
+                <td className="px-1 py-0.5 whitespace-nowrap">
+                  {Math.round(box.x)},{Math.round(box.y)}
+                </td>
+                <td className="px-1 py-0.5 whitespace-nowrap">
+                  {Math.round(box.width)}×{Math.round(box.height)}
+                </td>
+                <td className="px-1 py-0.5 text-gray-500">
+                  {box.text ? `${box.text.length}자` : '0자'}
+                </td>
+                <td className="px-1 py-0.5 text-right whitespace-nowrap">
+                  <button
+                    onClick={() => onBoxSelect(box)}
+                    className="text-blue-500 hover:text-blue-700 text-xs"
+                  >
+                    수정
+                  </button>
+                  <button
+                    onClick={() => onBoxDelete(box.id)}
+                    className="text-red-500 hover:text-red-700 text-xs ml-1"
+                  >
+                    삭제
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
   );
 
   const renderDetailView = () => (
