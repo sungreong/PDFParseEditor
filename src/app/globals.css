@@ -1,0 +1,145 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --foreground-rgb: 0, 0, 0;
+  --background-rgb: 255, 255, 255;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #0a0a0a;
+    --foreground: #ededed;
+  }
+}
+
+body {
+  color: rgb(var(--foreground-rgb));
+  background: rgb(var(--background-rgb));
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+/* PDF Viewer Styles */
+.pdf-container {
+  scroll-behavior: smooth;
+  -webkit-overflow-scrolling: touch;
+  width: 100%;
+  max-width: 100vw;
+  overflow-x: hidden;
+  position: relative;
+}
+
+.pdf-page-container {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  width: 100%;
+  margin-left: auto;
+  margin-right: auto;
+  transform-style: preserve-3d;
+  backface-visibility: hidden;
+  will-change: transform;
+}
+
+.pdf-page {
+  position: relative;
+  display: inline-block;
+  background: white;
+  box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+  transform-style: preserve-3d;
+  backface-visibility: hidden;
+}
+
+.react-pdf__Page {
+  position: relative;
+  overflow: visible;
+  background: white;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+
+.react-pdf__Page__canvas {
+  display: block;
+  user-select: none;
+  margin: 0 auto;
+  max-width: 100%;
+  height: auto;
+}
+
+/* Text Layer Styles */
+.react-pdf__Page__textContent {
+  position: absolute !important;
+  left: 0 !important;
+  top: 0 !important;
+  right: 0 !important;
+  bottom: 0 !important;
+  overflow: hidden;
+  opacity: 0.2;
+  line-height: 1;
+  pointer-events: none;
+  mix-blend-mode: multiply;
+  transform-origin: 0 0;
+  z-index: 1;
+}
+
+.pdf-page.selectable .react-pdf__Page__textContent {
+  pointer-events: auto;
+  user-select: text;
+  opacity: 1;
+}
+
+.react-pdf__Page__textContent > span {
+  color: transparent !important;
+  position: absolute !important;
+  white-space: pre;
+  cursor: text;
+  transform-origin: 0% 0%;
+}
+
+.react-pdf__Page__textContent > span::selection {
+  background: rgba(255, 255, 0, 0.4) !important;
+  color: transparent !important;
+}
+
+::selection {
+  background: rgba(255, 255, 0, 0.4) !important;
+  color: transparent !important;
+}
+
+/* Annotations */
+.react-pdf__Page__annotations {
+  display: none;
+}
+
+/* Loading Styles */
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.animate-spin {
+  animation: spin 1s linear infinite;
+}
+
+/* Zoom Controls */
+.zoom-controls {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: white;
+  padding: 0.5rem;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+/* Mobile Optimization */
+@media (max-width: 640px) {
+  .pdf-container {
+    padding: 0 0.5rem;
+  }
+  
+  .pdf-page-container {
+    margin-bottom: 0.5rem;
+  }
+}
