@@ -70,41 +70,42 @@ body {
 /* Text Layer Styles */
 .react-pdf__Page__textContent {
   position: absolute !important;
+  top: 0 !important;
+  left: 0 !important;
+  right: 0 !important;
+  bottom: 0 !important;
+  z-index: 1;
+  opacity: 0.2;
+  mix-blend-mode: multiply;
+  pointer-events: none;
+  transform: none !important;
+}
+
+.react-pdf__Page__textContent.selectable {
+  pointer-events: all;
+  user-select: text;
+}
+
+.react-pdf__Page__textContent > span {
+  position: absolute;
+  color: transparent;
+  transform-origin: 0% 0%;
+  line-height: 1.2;
+  white-space: pre;
+}
+
+.react-pdf__Page__annotations {
+  position: absolute !important;
   left: 0 !important;
   top: 0 !important;
   right: 0 !important;
   bottom: 0 !important;
-  overflow: hidden;
-  opacity: 0.2;
-  line-height: 1;
-  pointer-events: none;
-  mix-blend-mode: multiply;
-  transform-origin: 0 0;
-  z-index: 1;
+  overflow: hidden !important;
 }
 
-.pdf-page.selectable .react-pdf__Page__textContent {
-  pointer-events: auto;
-  user-select: text;
-  opacity: 1;
-}
-
-.react-pdf__Page__textContent > span {
-  color: transparent !important;
-  position: absolute !important;
-  white-space: pre;
-  cursor: text;
-  transform-origin: 0% 0%;
-}
-
-.react-pdf__Page__textContent > span::selection {
-  background: rgba(255, 255, 0, 0.4) !important;
-  color: transparent !important;
-}
-
-::selection {
-  background: rgba(255, 255, 0, 0.4) !important;
-  color: transparent !important;
+.pdf-page canvas {
+  display: block;
+  margin: 0 auto;
 }
 
 /* Annotations */
@@ -142,4 +143,43 @@ body {
   .pdf-page-container {
     margin-bottom: 0.5rem;
   }
+}
+
+/* Canvas Layer Styles */
+.canvas-layer {
+  position: absolute !important;
+  top: 0 !important;
+  left: 0 !important;
+  right: 0 !important;
+  bottom: 0 !important;
+  z-index: 2;
+}
+
+.canvas-layer.active {
+  pointer-events: all !important;
+  cursor: crosshair;
+}
+
+/* Box Styles */
+.box {
+  position: absolute;
+  border: 2px solid;
+  background-color: rgba(255, 255, 255, 0.1);
+  pointer-events: all;
+  cursor: move;
+  z-index: 3;
+}
+
+.box.selected {
+  border-style: dashed;
+  background-color: rgba(0, 123, 255, 0.1);
+}
+
+/* Box Preview Styles */
+.box-preview {
+  position: absolute;
+  border: 2px dashed;
+  background-color: rgba(0, 123, 255, 0.1);
+  pointer-events: none;
+  z-index: 3;
 }
