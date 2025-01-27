@@ -455,39 +455,61 @@ const PDFViewer: React.FC<PDFViewerProps> = ({ file, onFileChange }) => {
     setIsBoxDetailOpen(true);
   }, [setSelectedBox]);
 
-  // 텍스트 추출 함수 추가
+  // 텍스트 추출 함수 수정
   const extractTextFromBox = useCallback((box: Box) => {
     const textLayer = document.querySelector('.react-pdf__Page__textContent') as HTMLElement;
     let selectedText = '';
     
     if (textLayer) {
       const textElements = Array.from(textLayer.getElementsByTagName('span'));
-      const canvasRect = document.querySelector('.canvas-layer')?.getBoundingClientRect();
+      const pdfPage = document.querySelector('.react-pdf__Page') as HTMLElement;
       
-      if (canvasRect) {
+      if (pdfPage) {
+        const pdfRect = pdfPage.getBoundingClientRect();
+        const textLayerRect = textLayer.getBoundingClientRect();
+
+        // PDF 페이지와 텍스트 레이어 간의 스케일 계산
+        const scaleX = pdfDimensions.width / textLayerRect.width;
+        const scaleY = pdfDimensions.height / textLayerRect.height;
+
         textElements.forEach(span => {
           const rect = span.getBoundingClientRect();
           
-          // 텍스트 요소의 위치를 캔버스 기준으로 변환
-          const elementX = (rect.left - canvasRect.left) / scale;
-          const elementY = (rect.top - canvasRect.top) / scale;
-          const elementRight = elementX + (rect.width / scale);
-          const elementBottom = elementY + (rect.height / scale);
+          // 텍스트 요소의 위치를 PDF 좌표계로 변환
+          const elementX = (rect.left - textLayerRect.left) * scaleX;
+          const elementY = (rect.top - textLayerRect.top) * scaleY;
+          const elementWidth = rect.width * scaleX;
+          const elementHeight = rect.height * scaleY;
+          const elementRight = elementX + elementWidth;
+          const elementBottom = elementY + elementHeight;
 
-          // 박스 영역과 겹치는지 확인
-          if (
-            elementX < (box.x + box.width) &&
-            elementRight > box.x &&
-            elementY < (box.y + box.height) &&
-            elementBottom > box.y
-          ) {
-            selectedText += span.textContent + ' ';
+          // 박스 영역과 겹치는지 확인 (여유 있게 체크)
+          const margin = 3; // 여유 마진 증가
+          const overlap = (
+            elementX - margin < (box.x + box.width) &&
+            elementRight + margin > box.x &&
+            elementY - margin < (box.y + box.height) &&
+            elementBottom + margin > box.y
+          );
+
+          // 겹침 영역의 비율 계산
+          if (overlap) {
+            const overlapX = Math.min(elementRight, box.x + box.width) - Math.max(elementX, box.x);
+            const overlapY = Math.min(elementBottom, box.y + box.height) - Math.max(elementY, box.y);
+            const overlapArea = overlapX * overlapY;
+            const elementArea = elementWidth * elementHeight;
+            
+            // 일정 비율 이상 겹치는 경우에만 텍스트 추가
+            if (overlapArea > elementArea * 0.3) { // 30% 이상 겹치는 경우
+              selectedText += span.textContent + ' ';
+            }
           }
         });
       }
     }
+    
     return selectedText.trim();
-  }, [scale]);
+  }, [pdfDimensions.width, pdfDimensions.height]);
 
   const handleBoxUpdate = useCallback((boxId: string, updates: Partial<Box>) => {
     if (!file || !selectedBox) return;
@@ -498,14 +520,18 @@ const PDFViewer: React.FC<PDFViewerProps> = ({ file, onFileChange }) => {
       ...updates
     };
 
-    // 위치나 크기가 변경된 경우, 텍스트 자동 추출 시도
-    if ('x' in updates || 'y' in updates || 'width' in updates || 'height' in updates) {
-      // 사용자가 직접 텍스트를 수정한 경우, 그 텍스트를 우선 사용
-      if (!('text' in updates)) {
-        const newText = extractTextFromBox(updatedBox);
-        if (newText !== updatedBox.text) {
-          updatedBox.text = newText;
-        }
+    // 텍스트 처리 로직
+    if ('text' in updates) {
+      // 사용자가 직접 텍스트를 수정한 경우, 해당 텍스트를 사용
+      updatedBox.text = updates.text;
+    } else if ('x' in updates || 'y' in updates || 'width' in updates || 'height' in updates) {
+      // 위치나 크기가 변경된 경우 항상 텍스트를 새로 추출
+      const newText = extractTextFromBox(updatedBox);
+      if (newText) {
+        updatedBox.text = newText;
+      } else {
+        // 텍스트 추출 실패 시 기존 텍스트 유지
+        updatedBox.text = updatedBox.text || '';
       }
     }
 
