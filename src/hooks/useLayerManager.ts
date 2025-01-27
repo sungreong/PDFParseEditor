@@ -10,6 +10,7 @@ export interface Layer {
 export interface Box {
   id: string;
   layerId: string;
+  pageNumber: number;
   x: number;
   y: number;
   width: number;
@@ -27,7 +28,6 @@ interface LayerCanvas {
 interface PageData {
   boxes: Box[];
   canvases: LayerCanvas[];
-  layers?: Layer[];
 }
 
 interface DocumentData {
@@ -54,24 +54,34 @@ export function useLayerManager() {
   // 문서와 페이지에 대한 초기화
   const initializeDocumentPage = useCallback((documentId: string, pageNumber: number) => {
     setLayersByDocument(prev => {
-      if (prev[documentId]?.[pageNumber]) return prev;
+      const newState = { ...prev };
+      const pageNumberStr = pageNumber.toString();
+      
+      // 문서가 없으면 새로 생성
+      if (!newState[documentId]) {
+        newState[documentId] = {};
+      }
 
-      // 기존 레이어들의 캔버스 생성
-      const allCanvases = layers.map(layer => ({ 
-        layerId: layer.id, 
-        canvasRef: null 
-      }));
+      // 페이지가 없으면 새로 생성
+      if (!newState[documentId][pageNumberStr]) {
+        newState[documentId][pageNumberStr] = {
+          boxes: [],
+          canvases: layers.map(layer => ({
+            layerId: layer.id,
+            canvasRef: null
+          }))
+        };
+      }
 
-      return {
-        ...prev,
-        [documentId]: {
-          ...prev[documentId],
-          [pageNumber]: {
-            boxes: [],
-            canvases: allCanvases
-          }
-        }
-      };
+      // 디버깅: 페이지 초기화 후 상태 확인
+      console.log('페이지 초기화 후 상태:', {
+        documentId,
+        pageNumber,
+        pageData: newState[documentId][pageNumberStr],
+        전체상태: newState
+      });
+
+      return newState;
     });
   }, [layers]);
 
@@ -92,8 +102,8 @@ export function useLayerManager() {
       const newState = { ...prevDoc };
       
       // 각 문서와 페이지에 새 레이어의 캔버스 추가
-      for (const documentId in newState) {
-        for (const pageNumber in newState[documentId]) {
+      Object.keys(newState).forEach(documentId => {
+        Object.keys(newState[documentId]).forEach(pageNumber => {
           const pageData = newState[documentId][pageNumber];
           // 이미 존재하는 레이어인지 확인
           const existingCanvas = pageData.canvases.find(canvas => canvas.layerId === newLayer.id);
@@ -104,8 +114,8 @@ export function useLayerManager() {
               canvases: [...pageData.canvases, { layerId: newLayer.id, canvasRef: null }]
             };
           }
-        }
-      }
+        });
+      });
       
       return newState;
     });
@@ -135,9 +145,9 @@ export function useLayerManager() {
       Object.entries(newState).forEach(([documentId, document]) => {
         Object.entries(document).forEach(([pageNumber, pageData]) => {
           if (pageData) {
-            newState[documentId][parseInt(pageNumber)] = {
-              boxes: pageData.boxes.filter((box: Box) => box.layerId !== layerId),
-              canvases: pageData.canvases.filter((canvas: LayerCanvas) => canvas.layerId !== layerId)
+            newState[documentId][pageNumber] = {
+              boxes: pageData.boxes.filter(box => box.layerId !== layerId),
+              canvases: pageData.canvases.filter(canvas => canvas.layerId !== layerId)
             };
           }
         });
@@ -199,7 +209,8 @@ export function useLayerManager() {
 
   // 캔버스 다시 그리기
   const redrawCanvas = useCallback((documentId: string, pageNumber: number, layerId: string) => {
-    const pageData = layersByDocument[documentId]?.[pageNumber];
+    const pageNumberStr = pageNumber.toString();
+    const pageData = layersByDocument[documentId]?.[pageNumberStr];
     if (!pageData) return;
 
     const canvas = pageData.canvases.find(c => c.layerId === layerId)?.canvasRef;
@@ -227,7 +238,8 @@ export function useLayerManager() {
 
   // 모든 캔버스 다시 그리기
   const redrawAllCanvases = useCallback((documentId: string, pageNumber: number) => {
-    const pageData = layersByDocument[documentId]?.[pageNumber];
+    const pageNumberStr = pageNumber.toString();
+    const pageData = layersByDocument[documentId]?.[pageNumberStr];
     if (!pageData) return;
 
     // 모든 캔버스 초기화
@@ -247,34 +259,79 @@ export function useLayerManager() {
   }, [layersByDocument, activeLayer, redrawCanvas]);
 
   // 박스 추가
-  const addBox = useCallback((documentId: string, pageNumber: number, box: Omit<Box, 'id' | 'layerId'>) => {
-    if (!activeLayer) return;
+  const addBox = useCallback((documentId: string, pageNumber: number, box: Omit<Box, 'id' | 'layerId' | 'pageNumber'>) => {
+    if (!activeLayer) {
+      console.error('활성 레이어가 없습니다.');
+      return null;
+    }
+
+    const pageNumberStr = pageNumber.toString();
+    
+    // 페이지 데이터가 없으면 초기화
+    setLayersByDocument(prev => {
+      const newState = { ...prev };
+      if (!newState[documentId]) {
+        newState[documentId] = {};
+      }
+      if (!newState[documentId][pageNumberStr]) {
+        newState[documentId][pageNumberStr] = {
+          boxes: [],
+          canvases: layers.map(layer => ({
+            layerId: layer.id,
+            canvasRef: null
+          }))
+        };
+      }
+      return newState;
+    });
 
     const newBox: Box = {
       ...box,
       id: `box_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
       layerId: activeLayer.id,
+      pageNumber,
+      type: 'box',
       color: activeLayer.color
     };
 
     setLayersByDocument(prev => {
-      const pageData = prev[documentId]?.[pageNumber];
-      if (!pageData) return prev;
+      const pageData = prev[documentId]?.[pageNumberStr];
+      if (!pageData) {
+        console.error('페이지 데이터가 없습니다:', { documentId, pageNumber });
+        return prev;
+      }
 
-      return {
+      // 현재 레이어의 박스만 필터링하여 새 박스 추가
+      const currentLayerBoxes = pageData.boxes.filter(b => b.layerId === activeLayer.id);
+      const otherLayerBoxes = pageData.boxes.filter(b => b.layerId !== activeLayer.id);
+
+      const newState = {
         ...prev,
         [documentId]: {
           ...prev[documentId],
-          [pageNumber]: {
+          [pageNumberStr]: {
             ...pageData,
-            boxes: [...pageData.boxes, newBox]
+            boxes: [...otherLayerBoxes, ...currentLayerBoxes, newBox]
           }
         }
       };
+
+      // 디버깅: 박스가 추가된 후의 상태 확인
+      console.log('박스 추가 후 상태:', {
+        documentId,
+        pageNumber,
+        newBox,
+        layerId: activeLayer.id,
+        currentLayerBoxes: newState[documentId][pageNumberStr].boxes.filter(b => b.layerId === activeLayer.id),
+        allBoxes: newState[documentId][pageNumberStr].boxes,
+        전체상태: newState
+      });
+
+      return newState;
     });
 
     return newBox;
-  }, [activeLayer]);
+  }, [activeLayer, layers]);
 
   // 박스 삭제
   const removeBox = useCallback((documentId: string, pageNumber: number, boxId: string) => {
@@ -322,16 +379,37 @@ export function useLayerManager() {
 
   // 페이지 데이터 가져오기를 최적화
   const getPageData = useCallback((documentId: string, pageNumber: number) => {
-    const pageData = layersByDocument[documentId]?.[pageNumber];
+    const pageNumberStr = pageNumber.toString();
+    const pageData = layersByDocument[documentId]?.[pageNumberStr];
     
-    // 해당 페이지에 있는 레이어 ID만 필터링
-    const pageLayerIds = new Set(pageData?.canvases.map(canvas => canvas.layerId) || []);
-    const filteredLayers = layers.filter(layer => pageLayerIds.has(layer.id));
-    
-    return {
-      layers: filteredLayers,
+    // 디버깅: 페이지 데이터 요청 시 현재 상태 확인
+    console.log('페이지 데이터 요청:', {
+      documentId,
+      pageNumber,
+      pageData,
+      allLayers: layers,
       boxes: pageData?.boxes || [],
-      canvases: pageData?.canvases || []
+      boxesByLayer: layers.map(layer => ({
+        layerId: layer.id,
+        layerName: layer.name,
+        boxes: pageData?.boxes.filter(box => box.layerId === layer.id) || []
+      })),
+      전체상태: layersByDocument
+    });
+
+    if (!pageData) {
+      console.warn('페이지 데이터가 없습니다:', { documentId, pageNumber });
+      return {
+        layers: layers,
+        boxes: [],
+        canvases: []
+      };
+    }
+
+    return {
+      layers: layers,
+      boxes: pageData.boxes,
+      canvases: pageData.canvases
     };
   }, [layers, layersByDocument]);
 
@@ -340,45 +418,98 @@ export function useLayerManager() {
     const redrawTimeout = setTimeout(() => {
       // 모든 문서의 모든 페이지의 캔버스 다시 그리기
       Object.entries(layersByDocument).forEach(([documentId, pages]) => {
-        Object.keys(pages).forEach(pageNumber => {
+        Object.entries(pages).forEach(([pageNumber]) => {
           const pageNum = parseInt(pageNumber);
-          const pageData = pages[pageNum];
-          
-          // 각 레이어의 캔버스만 다시 그리기
-          pageData.canvases.forEach(canvas => {
-            if (canvas.canvasRef) {
-              const layer = layers.find(l => l.id === canvas.layerId);
-              if (layer) {
-                redrawCanvas(documentId, pageNum, layer.id);
-              }
-            }
-          });
+          redrawAllCanvases(documentId, pageNum);
         });
       });
     }, 0);
 
     return () => clearTimeout(redrawTimeout);
-  }, [layers.length, activeLayer?.id]); // 레이어 개수와 활성 레이어 ID만 감시
+  }, [layers, activeLayer, layersByDocument, redrawAllCanvases]); // 모든 관련 의존성 추가
 
   const updateLayerBoxesColor = useCallback((documentId: string, pageNumber: number, layerId: string, color: string) => {
     setLayersByDocument(prev => {
-      const documentKey = `${documentId}_${pageNumber}`;
-      const pageData = prev[documentKey];
+      const pageData = prev[documentId]?.[pageNumber];
       if (!pageData) return prev;
 
-      const updatedBoxes = pageData.boxes.map((box: Box) => 
-        box.layerId === layerId ? { ...box, color } : box
-      );
-
-      return {
+      const newState = {
         ...prev,
-        [documentKey]: {
-          ...pageData,
-          boxes: updatedBoxes
+        [documentId]: {
+          ...prev[documentId],
+          [pageNumber]: {
+            ...pageData,
+            boxes: pageData.boxes.map(box => 
+              box.layerId === layerId ? { ...box, color } : box
+            )
+          }
         }
       };
+
+      // 디버깅: 색상 업데이트 후 상태 확인
+      console.log('색상 업데이트 후 상태:', {
+        documentId,
+        pageNumber,
+        layerId,
+        color,
+        boxes: newState[documentId][pageNumber].boxes,
+        전체상태: newState
+      });
+
+      return newState;
     });
   }, []);
+
+  // 여러 박스 한번에 추가
+  const addBoxes = useCallback((documentId: string, boxes: Box[]) => {
+    if (!activeLayer) {
+      console.error('활성 레이어가 없습니다.');
+      return;
+    }
+
+    setLayersByDocument(prev => {
+      const newState = { ...prev };
+      
+      // 페이지별로 박스 그룹화
+      const boxesByPage = new Map<number, Box[]>();
+      boxes.forEach(box => {
+        const pageBoxes = boxesByPage.get(box.pageNumber) || [];
+        pageBoxes.push(box);
+        boxesByPage.set(box.pageNumber, pageBoxes);
+      });
+
+      // 각 페이지에 박스 추가
+      boxesByPage.forEach((pageBoxes, pageNumber) => {
+        const pageNumberStr = pageNumber.toString();
+        
+        // 페이지 데이터가 없으면 초기화
+        if (!newState[documentId]) {
+          newState[documentId] = {};
+        }
+        if (!newState[documentId][pageNumberStr]) {
+          newState[documentId][pageNumberStr] = {
+            boxes: [],
+            canvases: layers.map(layer => ({
+              layerId: layer.id,
+              canvasRef: null
+            }))
+          };
+        }
+
+        // 박스 추가
+        const pageData = newState[documentId][pageNumberStr];
+        const currentLayerBoxes = pageData.boxes.filter(b => b.layerId === activeLayer.id);
+        const otherLayerBoxes = pageData.boxes.filter(b => b.layerId !== activeLayer.id);
+
+        newState[documentId][pageNumberStr] = {
+          ...pageData,
+          boxes: [...otherLayerBoxes, ...currentLayerBoxes, ...pageBoxes]
+        };
+      });
+
+      return newState;
+    });
+  }, [activeLayer, layers]);
 
   return {
     layers,
@@ -394,6 +525,7 @@ export function useLayerManager() {
     toggleLayerVisibility,
     setCanvasRef,
     addBox,
+    addBoxes,
     removeBox,
     updateBox,
     getPageData,

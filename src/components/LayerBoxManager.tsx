@@ -1,29 +1,31 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import type { Layer, Box } from '../hooks/useLayerManager';
 import DraggablePopup from './DraggablePopup';
 
 interface LayerBoxManagerProps {
-  isOpen: boolean;
-  onClose: () => void;
   layer: Layer;
   documentName: string;
-  getPageData: (documentId: string, pageNumber: number) => any;
+  getPageData: (documentId: string, pageNumber: number) => {
+    layers: Layer[];
+    boxes: Box[];
+    canvases: any[];
+  };
   numPages: number;
   onBoxSelect: (box: Box) => void;
   onBoxDelete: (boxId: string) => void;
   onBoxUpdate: (boxId: string, updates: Partial<Box>) => void;
+  onBoxesUpload: (boxes: Box[]) => void;
 }
 
 const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
-  isOpen,
-  onClose,
   layer,
   documentName,
   getPageData,
   numPages,
   onBoxSelect,
   onBoxDelete,
-  onBoxUpdate
+  onBoxUpdate,
+  onBoxesUpload
 }) => {
   const [selectedBoxId, setSelectedBoxId] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
@@ -82,6 +84,97 @@ const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
         return 0;
       });
   }, [allBoxes, searchTerm, selectedPage, sortBy, textLengthFilter]);
+
+  // JSON 다운로드 함수
+  const handleDownloadJSON = useCallback(() => {
+    // 모든 페이지의 데이터 수집
+    const allPagesData = Array.from({ length: numPages }, (_, i) => i + 1).map(pageNum => {
+      const pageData = getPageData(documentName, pageNum);
+      if (!pageData) return null;
+
+      // 현재 레이어의 박스만 필터링
+      const boxes = pageData.boxes.filter(box => box.layerId === layer.id);
+      
+      return {
+        pageNumber: pageNum,
+        boxes: boxes.map(box => ({
+          ...box,
+          pageWidth: 800, // PDF 기본 너비
+          pageHeight: 1131, // PDF 기본 높이 (A4 비율)
+        }))
+      };
+    }).filter(Boolean);
+
+    // JSON 데이터 구성
+    const jsonData = {
+      documentName,
+      layer: {
+        id: layer.id,
+        name: layer.name,
+        color: layer.color
+      },
+      pages: allPagesData,
+      metadata: {
+        totalPages: numPages,
+        totalBoxes: allPagesData.reduce((sum, page) => sum + (page?.boxes.length || 0), 0),
+        exportDate: new Date().toISOString(),
+        defaultPageWidth: 800,
+        defaultPageHeight: 1131
+      }
+    };
+
+    // JSON 파일 생성 및 다운로드
+    const blob = new Blob([JSON.stringify(jsonData, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${documentName}_${layer.name}_boxes.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }, [documentName, layer, numPages, getPageData]);
+
+  // JSON 파일 업로드 처리 함수
+  const handleUploadJSON = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const jsonData = JSON.parse(e.target?.result as string);
+        
+        // pages 배열에서 모든 boxes를 추출
+        const uploadedBoxes: Box[] = [];
+        if (Array.isArray(jsonData.pages)) {
+          jsonData.pages.forEach((page: any) => {
+            if (Array.isArray(page.boxes)) {
+              const boxesWithLayerId = page.boxes.map((box: any) => ({
+                ...box,
+                layerId: layer.id  // 현재 레이어 ID로 설정
+              }));
+              uploadedBoxes.push(...boxesWithLayerId);
+            }
+          });
+        }
+
+        if (uploadedBoxes.length > 0) {
+          onBoxesUpload(uploadedBoxes);
+          alert(`${uploadedBoxes.length}개의 박스를 성공적으로 업로드했습니다.`);
+        } else {
+          alert('업로드할 박스를 찾을 수 없습니다.');
+        }
+      } catch (error) {
+        alert('JSON 파일 처리 중 오류가 발생했습니다.');
+        console.error('JSON 파싱 오류:', error);
+      }
+    };
+    reader.readAsText(file);
+    
+    // 파일 입력 초기화
+    event.target.value = '';
+  }, [layer.id, onBoxesUpload]);
 
   const handleMouseDown = (e: React.MouseEvent) => {
     setIsResizing(true);
@@ -301,62 +394,81 @@ const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
     </div>
   );
 
-  if (!isOpen) return null;
-
   return (
-    <DraggablePopup isOpen={isOpen} onClose={onClose} title={`${layer.name} 박스 관리`}>
-      <div className="flex flex-col h-full w-full">
-        <div className="flex items-center gap-2 p-1 border-b shrink-0">
-          <select
-            value={selectedPage?.toString() || ''}
-            onChange={(e) => setSelectedPage(e.target.value ? Number(e.target.value) : null)}
-            className="px-1 py-0.5 border rounded text-xs"
-          >
-            <option value="">전체</option>
-            {Array.from({ length: numPages }, (_, i) => i + 1).map(page => (
-              <option key={page} value={page}>{page}p</option>
-            ))}
-          </select>
-          <select
-            value={sortBy}
-            onChange={(e) => setSortBy(e.target.value as 'index' | 'position')}
-            className="px-1 py-0.5 border rounded text-xs"
-          >
-            <option value="index">기본</option>
-            <option value="position">위치</option>
-          </select>
-          <input
-            type="text"
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            placeholder="텍스트 검색..."
-            className="px-2 py-0.5 border rounded text-xs flex-1"
-          />
+    <div className="flex flex-col h-full w-full bg-white">
+      <div className="flex items-center gap-2 p-1 border-b shrink-0">
+        <select
+          value={selectedPage?.toString() || ''}
+          onChange={(e) => setSelectedPage(e.target.value ? Number(e.target.value) : null)}
+          className="px-1 py-0.5 border rounded text-xs"
+        >
+          <option value="">전체</option>
+          {Array.from({ length: numPages }, (_, i) => i + 1).map(page => (
+            <option key={page} value={page}>{page}p</option>
+          ))}
+        </select>
+        <select
+          value={sortBy}
+          onChange={(e) => setSortBy(e.target.value as 'index' | 'position')}
+          className="px-1 py-0.5 border rounded text-xs"
+        >
+          <option value="index">기본</option>
+          <option value="position">위치</option>
+        </select>
+        <input
+          type="text"
+          value={searchTerm}
+          onChange={(e) => setSearchTerm(e.target.value)}
+          placeholder="텍스트 검색..."
+          className="px-2 py-0.5 border rounded text-xs flex-1"
+        />
+        <button
+          onClick={() => setShowDetails(!showDetails)}
+          className={`px-2 py-0.5 rounded text-xs ${
+            showDetails 
+              ? 'bg-blue-100 text-blue-700' 
+              : 'bg-gray-100 text-gray-700'
+          }`}
+        >
+          {showDetails ? '목록보기' : '상세보기'}
+        </button>
+      </div>
+      <div className="flex-1 overflow-auto p-4">
+        {showDetails ? (
+          <div className="h-full w-full">
+            {renderDetailView()}
+          </div>
+        ) : (
+          <div className="h-full w-full">
+            {renderBoxTable()}
+          </div>
+        )}
+      </div>
+      <div className="flex items-center justify-between p-4 space-x-4">
+        <div className="flex items-center space-x-2">
           <button
-            onClick={() => setShowDetails(!showDetails)}
-            className={`px-2 py-0.5 rounded text-xs ${
-              showDetails 
-                ? 'bg-blue-100 text-blue-700' 
-                : 'bg-gray-100 text-gray-700'
-            }`}
+            onClick={handleDownloadJSON}
+            className="px-3 py-1 bg-blue-500 text-white rounded hover:bg-blue-600 text-sm transition-colors"
           >
-            {showDetails ? '목록보기' : '상세보기'}
+            JSON 다운로드
           </button>
+          <label className="cursor-pointer">
+            <input
+              type="file"
+              accept=".json"
+              onChange={handleUploadJSON}
+              className="hidden"
+            />
+            <span className="px-3 py-1 bg-green-500 text-white rounded hover:bg-green-600 text-sm transition-colors">
+              JSON 업로드
+            </span>
+          </label>
         </div>
-
-        <div className="flex-1 min-h-0 w-full overflow-auto">
-          {showDetails ? (
-            <div className="h-full w-full">
-              {renderDetailView()}
-            </div>
-          ) : (
-            <div className="h-full w-full">
-              {renderBoxTable()}
-            </div>
-          )}
+        <div className="text-sm text-gray-500">
+          총 {filteredBoxes.length}개의 박스
         </div>
       </div>
-    </DraggablePopup>
+    </div>
   );
 };
 

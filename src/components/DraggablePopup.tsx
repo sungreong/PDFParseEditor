@@ -5,64 +5,92 @@ interface DraggablePopupProps {
   onClose: () => void;
   title: string;
   children: React.ReactNode;
+  width?: string;
+  height?: string;
 }
 
 const DraggablePopup: React.FC<DraggablePopupProps> = ({
   isOpen,
   onClose,
   title,
-  children
+  children,
+  width = '500px',
+  height = '400px'
 }) => {
-  const [position, setPosition] = useState({ x: window.innerWidth / 2 - 300, y: window.innerHeight / 2 - 400 });
-  const [size, setSize] = useState({ width: 600, height: 600 });
+  const [position, setPosition] = useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
+  const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
+  const [size, setSize] = useState({ width, height });
   const [isResizing, setIsResizing] = useState(false);
-  const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
+  const [resizeType, setResizeType] = useState<'right' | 'bottom' | 'corner' | null>(null);
+  const [resizeStart, setResizeStart] = useState({ x: 0, y: 0 });
+  const [initialSize, setInitialSize] = useState({ width: 0, height: 0 });
+  
   const popupRef = useRef<HTMLDivElement>(null);
 
-  const handleMouseDown = (e: React.MouseEvent) => {
-    if (e.target === e.currentTarget) {
-      setIsDragging(true);
-      const rect = popupRef.current?.getBoundingClientRect();
-      if (rect) {
-        setDragOffset({
-          x: e.clientX - rect.left,
-          y: e.clientY - rect.top
-        });
-      }
+  useEffect(() => {
+    if (isOpen && popupRef.current) {
+      const rect = popupRef.current.getBoundingClientRect();
+      setPosition({
+        x: (window.innerWidth - rect.width) / 2,
+        y: (window.innerHeight - rect.height) / 2
+      });
     }
+  }, [isOpen]);
+
+  const handleMouseDown = (e: React.MouseEvent) => {
+    setIsDragging(true);
+    setDragStart({
+      x: e.clientX - position.x,
+      y: e.clientY - position.y
+    });
   };
 
-  const handleResizeMouseDown = (e: React.MouseEvent) => {
-    setIsResizing(true);
+  const handleResizeStart = (e: React.MouseEvent, type: 'right' | 'bottom' | 'corner') => {
     e.stopPropagation();
-    e.preventDefault();
+    setIsResizing(true);
+    setResizeType(type);
+    setResizeStart({ x: e.clientX, y: e.clientY });
+    setInitialSize({
+      width: popupRef.current?.offsetWidth || 0,
+      height: popupRef.current?.offsetHeight || 0
+    });
   };
 
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
       if (isDragging) {
-        const newX = e.clientX - dragOffset.x;
-        const newY = e.clientY - dragOffset.y;
-        setPosition({ x: newX, y: newY });
+        setPosition({
+          x: e.clientX - dragStart.x,
+          y: e.clientY - dragStart.y
+        });
       }
       
-      if (isResizing && popupRef.current) {
-        const rect = popupRef.current.getBoundingClientRect();
-        const newWidth = e.clientX - rect.left;
-        const newHeight = e.clientY - rect.top;
+      if (isResizing && resizeType) {
+        const deltaX = e.clientX - resizeStart.x;
+        const deltaY = e.clientY - resizeStart.y;
         
-        // 최소/최대 크기 제한
-        const clampedWidth = Math.max(400, Math.min(1200, newWidth));
-        const clampedHeight = Math.max(300, Math.min(800, newHeight));
+        let newWidth = initialSize.width;
+        let newHeight = initialSize.height;
         
-        setSize({ width: clampedWidth, height: clampedHeight });
+        if (resizeType === 'right' || resizeType === 'corner') {
+          newWidth = Math.max(initialSize.width + deltaX, 400);
+        }
+        if (resizeType === 'bottom' || resizeType === 'corner') {
+          newHeight = Math.max(initialSize.height + deltaY, 300);
+        }
+        
+        setSize({
+          width: `${newWidth}px`,
+          height: `${newHeight}px`
+        });
       }
     };
 
     const handleMouseUp = () => {
       setIsDragging(false);
       setIsResizing(false);
+      setResizeType(null);
     };
 
     if (isDragging || isResizing) {
@@ -74,53 +102,60 @@ const DraggablePopup: React.FC<DraggablePopupProps> = ({
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
     };
-  }, [isDragging, isResizing, dragOffset]);
+  }, [isDragging, dragStart, isResizing, resizeType, resizeStart, initialSize]);
 
   if (!isOpen) return null;
 
   return (
-    <div
-      ref={popupRef}
-      className="fixed bg-white rounded-lg shadow-xl flex flex-col"
-      style={{
-        left: `${position.x}px`,
-        top: `${position.y}px`,
-        width: `${size.width}px`,
-        height: `${size.height}px`,
-        minWidth: '400px',
-        minHeight: '300px',
-        maxWidth: '1200px',
-        maxHeight: '800px',
-        zIndex: 50
-      }}
-    >
-      {/* 헤더 */}
+    <div className="fixed inset-0" style={{ background: 'transparent', pointerEvents: 'none' }}>
       <div
-        className="px-4 py-2 bg-gray-100 rounded-t-lg cursor-move flex justify-between items-center shrink-0"
-        onMouseDown={handleMouseDown}
-      >
-        <h2 className="text-sm font-semibold">{title}</h2>
-        <button
-          onClick={onClose}
-          className="text-gray-500 hover:text-gray-700"
-        >
-          ✕
-        </button>
-      </div>
-
-      {/* 컨텐츠 */}
-      <div className="flex-1 w-full h-full overflow-hidden">
-        {children}
-      </div>
-
-      {/* 리사이즈 핸들 */}
-      <div
-        className="absolute bottom-0 right-0 w-4 h-4 cursor-se-resize bg-gray-200 hover:bg-gray-300"
-        onMouseDown={handleResizeMouseDown}
+        ref={popupRef}
+        className="fixed bg-white rounded-lg shadow-xl overflow-hidden"
         style={{
-          clipPath: 'polygon(100% 0, 100% 100%, 0 100%)'
+          left: position.x,
+          top: position.y,
+          width: size.width,
+          height: size.height,
+          minWidth: '400px',
+          minHeight: '300px',
+          pointerEvents: 'auto'
         }}
-      />
+      >
+        {/* 헤더 */}
+        <div
+          className="bg-gray-100 px-4 py-3 cursor-move flex justify-between items-center"
+          onMouseDown={handleMouseDown}
+        >
+          <h2 className="text-lg font-semibold text-gray-800">{title}</h2>
+          <button
+            onClick={onClose}
+            className="text-gray-500 hover:text-gray-700 transition-colors"
+          >
+            ✕
+          </button>
+        </div>
+
+        {/* 컨텐츠 */}
+        <div className="h-[calc(100%-48px)] overflow-auto">
+          {children}
+        </div>
+
+        {/* 리사이즈 핸들 */}
+        <div
+          className="absolute right-0 top-0 bottom-0 w-1 cursor-ew-resize hover:bg-blue-500 hover:opacity-50"
+          onMouseDown={(e) => handleResizeStart(e, 'right')}
+        />
+        <div
+          className="absolute left-0 right-0 bottom-0 h-1 cursor-ns-resize hover:bg-blue-500 hover:opacity-50"
+          onMouseDown={(e) => handleResizeStart(e, 'bottom')}
+        />
+        <div
+          className="absolute right-0 bottom-0 w-4 h-4 cursor-nwse-resize"
+          onMouseDown={(e) => handleResizeStart(e, 'corner')}
+        >
+          <div className="absolute right-1 bottom-1 w-2 h-2 bg-gray-400 rounded-full" />
+        </div>
+      </div>
     </div>
   );
 };
