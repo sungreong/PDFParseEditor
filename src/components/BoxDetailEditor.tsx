@@ -13,6 +13,7 @@ interface BoxDetailEditorProps {
   documentName: string;
   viewerWidth: number;
   viewerHeight: number;
+  layers: { id: string; name: string; color: string }[];
 }
 
 interface CollapsibleSectionProps {
@@ -54,7 +55,8 @@ const BoxDetailEditor: React.FC<BoxDetailEditorProps> = ({
   pageNumber,
   documentName,
   viewerWidth,
-  viewerHeight
+  viewerHeight,
+  layers
 }) => {
   const [editedData, setEditedData] = useState({
     color: box.color || '',
@@ -205,6 +207,29 @@ const BoxDetailEditor: React.FC<BoxDetailEditorProps> = ({
               <div className="text-sm">
                 <span className="text-gray-500">타입:</span> {box.type}
               </div>
+              <div className="text-sm">
+                <span className="text-gray-500">페이지:</span> {pageNumber}
+              </div>
+              <div className="text-sm flex items-center gap-2">
+                <span className="text-gray-500">레이어:</span>
+                <select
+                  value={box.layerId || ''}
+                  onChange={(e) => onUpdate(box.id, { layerId: e.target.value })}
+                  className="flex-1 px-2 py-1 border rounded text-sm"
+                >
+                  {layers.map((layer) => (
+                    <option key={layer.id} value={layer.id}>
+                      {layer.name}
+                    </option>
+                  ))}
+                </select>
+                <div
+                  className="w-6 h-6 rounded-full border"
+                  style={{
+                    backgroundColor: layers.find(l => l.id === box.layerId)?.color || '#000000'
+                  }}
+                />
+              </div>
               <div className="flex items-center gap-2">
                 <span className="text-sm text-gray-500">색상:</span>
                 <input
@@ -214,6 +239,14 @@ const BoxDetailEditor: React.FC<BoxDetailEditorProps> = ({
                   className="w-8 h-8 rounded cursor-pointer"
                 />
                 <span className="text-sm font-mono">{editedData.color || '#000000'}</span>
+              </div>
+              <div className="text-sm">
+                <span className="text-gray-500">생성일:</span>{' '}
+                {box.metadata?.createdAt ? new Date(box.metadata.createdAt).toLocaleString() : '-'}
+              </div>
+              <div className="text-sm">
+                <span className="text-gray-500">수정일:</span>{' '}
+                {box.metadata?.updatedAt ? new Date(box.metadata.updatedAt).toLocaleString() : '-'}
               </div>
             </div>
             {/* 변경 사항 비교 섹션 */}

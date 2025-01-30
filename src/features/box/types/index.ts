@@ -7,6 +7,11 @@ export interface Box {
   text?: string;
   type?: 'title' | 'content' | 'note';
   layerId: string;
+  color?: string;
+  metadata?: {
+    createdAt: string;
+    updatedAt: string;
+  };
 }
 
 export interface BoxState {

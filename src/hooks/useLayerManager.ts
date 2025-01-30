@@ -18,6 +18,10 @@ export interface Box {
   type: string;
   color?: string;
   text?: string;
+  metadata?: {
+    createdAt: string;
+    updatedAt: string;
+  };
 }
 
 interface LayerCanvas {
@@ -291,7 +295,11 @@ export function useLayerManager() {
       layerId: activeLayer.id,
       pageNumber,
       type: 'box',
-      color: activeLayer.color
+      color: activeLayer.color,
+      metadata: {
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      }
     };
 
     setLayersByDocument(prev => {
@@ -369,7 +377,14 @@ export function useLayerManager() {
           [pageNumber]: {
             ...pageData,
             boxes: pageData.boxes.map(box =>
-              box.id === boxId ? { ...box, ...updates } : box
+              box.id === boxId ? {
+                ...box,
+                ...updates,
+                metadata: {
+                  ...box.metadata,
+                  updatedAt: new Date().toISOString()
+                }
+              } : box
             )
           }
         }
@@ -473,8 +488,15 @@ export function useLayerManager() {
       // 페이지별로 박스 그룹화
       const boxesByPage = new Map<number, Box[]>();
       boxes.forEach(box => {
+        const boxWithMetadata = {
+          ...box,
+          metadata: {
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString()
+          }
+        };
         const pageBoxes = boxesByPage.get(box.pageNumber) || [];
-        pageBoxes.push(box);
+        pageBoxes.push(boxWithMetadata);
         boxesByPage.set(box.pageNumber, pageBoxes);
       });
 

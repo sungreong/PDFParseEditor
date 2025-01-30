@@ -1765,42 +1765,13 @@ const PDFViewer: React.FC<PDFViewerProps> = ({ file, onFileChange }) => {
           <BoxDetailEditor
             box={selectedBox}
             originalBox={originalBox}
+            onUpdate={handleBoxUpdate}
+            onCancel={() => setIsBoxDetailOpen(false)}
             pageNumber={pageNumber}
             documentName={file.name}
-            onUpdate={(boxId, updates) => {
-              // 텍스트 업데이트가 있는 경우
-              if ('text' in updates) {
-                handleBoxUpdate(boxId, updates);
-              } 
-              // 위치나 크기 변경이 있는 경우
-              else if ('x' in updates || 'y' in updates || 'width' in updates || 'height' in updates) {
-                const textLayer = document.querySelector('.react-pdf__Page__textContent') as HTMLElement;
-                if (textLayer) {
-                  const updatedBox = {
-                    ...selectedBox,
-                    ...updates
-                  };
-                  const newText = extractTextFromBox(updatedBox);
-                  handleBoxUpdate(boxId, { ...updates, text: newText });
-                }
-              } 
-              // 기타 업데이트의 경우
-              else {
-                handleBoxUpdate(boxId, updates);
-              }
-            }}
-            onCancel={() => {
-              if (file && originalBox) {
-                const updatedBox = { ...originalBox };
-                setSelectedBox(updatedBox);
-                updateBox(file.name, pageNumber, originalBox.id, updatedBox);
-                redrawAllCanvases(file.name, pageNumber);
-              }
-              setIsBoxDetailOpen(false);
-              setOriginalBox(null);
-            }}
             viewerWidth={viewerDimensions.width}
             viewerHeight={viewerDimensions.height}
+            layers={layers}
           />
         </DraggablePopup>
       )}
