@@ -20,6 +20,13 @@ export interface Canvas {
   canvasRef: HTMLCanvasElement | null;
 }
 
+export interface Connection {
+  id: string;
+  source: Box;
+  target: Box;
+  layerId: string;
+}
+
 export interface PageData {
   layers: Layer[];
   boxes: Box[];

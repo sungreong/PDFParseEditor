@@ -31,6 +31,14 @@ interface CompareViewerProps {
   onClose: () => void;
 }
 
+// 연결선 관련 타입 추가
+interface Connection {
+  id: string;
+  startBox: Box;
+  endBox: Box;
+  layerId: string;
+}
+
 const CompareViewer: React.FC<CompareViewerProps> = ({
   file,
   layers,
@@ -211,6 +219,7 @@ const PDFViewer: React.FC<PDFViewerProps> = ({ file, onFileChange }) => {
   const pageRefs = useRef<Map<number, HTMLDivElement>>(new Map());
   const [pageInputValue, setPageInputValue] = useState<string>('1');
   const [isDrawMode, setIsDrawMode] = useState(false);
+  const [isDrawingArrow, setIsDrawingArrow] = useState(false);
   const [startPoint, setStartPoint] = useState<{ x: number; y: number } | null>(null);
   const [currentBox, setCurrentBox] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
   const [isBoxDetailOpen, setIsBoxDetailOpen] = useState(false);
@@ -254,6 +263,10 @@ const PDFViewer: React.FC<PDFViewerProps> = ({ file, onFileChange }) => {
     redrawAllCanvases,
     updateLayerBoxesColor
   } = useLayerManager();
+
+  // 연결선 관련 상태 추가
+  const [connections, setConnections] = useState<Connection[]>([]);
+  const [startBox, setStartBox] = useState<Box | null>(null);
 
   // PDF 크기 계산
   const pdfDimensions = useMemo(() => {
@@ -552,24 +565,19 @@ const PDFViewer: React.FC<PDFViewerProps> = ({ file, onFileChange }) => {
   }, [file, pageNumber, selectedBox, extractTextFromBox, updateBox, redrawAllCanvases]);
 
   // 박스 삭제 이벤트 핸들러
-  const handleBoxDelete = useCallback((e: KeyboardEvent) => {
-    if (e.key === 'Delete' && selectedBox && file) {
-      removeBox(file.name, pageNumber, selectedBox.id);
+  const handleBoxDelete = useCallback((boxId: string) => {
+    if (file && pageNumber) {
+      removeBox(file.name, pageNumber, boxId);
     }
-  }, [selectedBox, file, pageNumber, removeBox]);
-
-  // 키보드 이벤트 리스너 추가
-  useEffect(() => {
-    window.addEventListener('keydown', handleBoxDelete);
-    return () => {
-      window.removeEventListener('keydown', handleBoxDelete);
-    };
-  }, [handleBoxDelete]);
+  }, [file, pageNumber, removeBox]);
 
   // 레이어 관련 핸들러
-  const handleLayerChange = useCallback((layer: Layer) => {
-    setActiveLayer(layer);
-  }, [setActiveLayer]);
+  const handleLayerChange = useCallback((layerId: string) => {
+    const layer = layers.find(l => l.id === layerId);
+    if (layer) {
+      setActiveLayer(layer);
+    }
+  }, [layers, setActiveLayer]);
 
   const handleVisibilityToggle = useCallback((layerId: string) => {
     toggleLayerVisibility(layerId);
@@ -777,6 +785,102 @@ const PDFViewer: React.FC<PDFViewerProps> = ({ file, onFileChange }) => {
     };
   }, [isResizingBox, handleResizeMove, handleResizeEnd]);
 
+  // 박스 중앙 좌표 계산 함수
+  const getBoxCenter = (box: Box) => {
+    return {
+      x: box.x + box.width / 2,
+      y: box.y + box.height / 2
+    };
+  };
+
+  // 연결선 추가 핸들러
+  const handleBoxConnection = (box: Box) => {
+    if (!activeLayer || !isDrawingArrow) return;
+
+    if (!startBox) {
+      setStartBox(box);
+    } else {
+      if (startBox.id !== box.id) {
+        const newConnection: Connection = {
+          id: `connection_${Date.now()}`,
+          startBox: startBox,
+          endBox: box,
+          layerId: activeLayer.id
+        };
+        setConnections(prev => [...prev, newConnection]);
+      }
+      setStartBox(null);
+    }
+  };
+
+  // 연결선 삭제 핸들러
+  const handleDeleteConnection = useCallback((connectionId: string) => {
+    setConnections(prev => prev.filter(conn => conn.id !== connectionId));
+  }, []);
+
+  // 연결선 렌더링 컴포넌트
+  const ConnectionLines = () => (
+    <svg 
+      className="absolute inset-0 pointer-events-none" 
+      style={{ 
+        width: pdfDimensions.width,
+        height: pdfDimensions.height,
+        transform: `scale(${scale})`,
+        transformOrigin: 'top left',
+        zIndex: 2 
+      }}
+    >
+      <defs>
+        <marker
+          id="arrowhead"
+          markerWidth="10"
+          markerHeight="7"
+          refX="9"
+          refY="3.5"
+          orient="auto"
+        >
+          <polygon
+            points="0 0, 10 3.5, 0 7"
+            fill={activeLayer?.color || '#000'}
+          />
+        </marker>
+      </defs>
+      {connections.map(connection => {
+        const start = getBoxCenter(connection.startBox);
+        const end = getBoxCenter(connection.endBox);
+        const layer = layers.find(l => l.id === connection.layerId);
+        
+        return (
+          <g key={connection.id}>
+            <line
+              x1={start.x}
+              y1={start.y}
+              x2={end.x}
+              y2={end.y}
+              stroke={layer?.color || '#000'}
+              strokeWidth="2"
+              markerEnd="url(#arrowhead)"
+              style={{ pointerEvents: 'none' }}
+            />
+            <line
+              x1={start.x}
+              y1={start.y}
+              x2={end.x}
+              y2={end.y}
+              stroke="transparent"
+              strokeWidth="10"
+              style={{ cursor: 'pointer' }}
+              onClick={(e) => {
+                e.stopPropagation();
+                handleDeleteConnection(connection.id);
+              }}
+            />
+          </g>
+        );
+      })}
+    </svg>
+  );
+
   const renderPage = (pageNum: number) => {
     const pageData = file ? getPageData(file.name, pageNum) : null;
 
@@ -813,6 +917,8 @@ const PDFViewer: React.FC<PDFViewerProps> = ({ file, onFileChange }) => {
               </div>
             }
           />
+          {/* 연결선 렌더링 */}
+          <ConnectionLines />
           {pageData?.canvases.map(canvas => (
             <canvas
               key={canvas.layerId}
@@ -976,7 +1082,7 @@ const PDFViewer: React.FC<PDFViewerProps> = ({ file, onFileChange }) => {
                         className={`cursor-pointer ${
                           activeLayer?.id === layer.id ? 'font-semibold' : ''
                         }`}
-                        onClick={() => handleLayerChange(layer)}
+                        onClick={() => handleLayerChange(layer.id)}
                       >
                         {layer.name}
                       </span>
@@ -995,7 +1101,7 @@ const PDFViewer: React.FC<PDFViewerProps> = ({ file, onFileChange }) => {
                     <div className="flex items-center gap-2">
                       <button
                         onClick={() => {
-                          handleLayerChange(layer);
+                          handleLayerChange(layer.id);
                           setIsLayerBoxManagerOpen(true);
                         }}
                         className="px-2 py-1 text-blue-500 hover:bg-blue-50 rounded transition-colors text-xs"
@@ -1238,12 +1344,17 @@ const PDFViewer: React.FC<PDFViewerProps> = ({ file, onFileChange }) => {
 
   const renderBox = useCallback((box: Box, layer: Layer) => {
     const isSelected = selectedBox?.id === box.id;
+    const isStartBox = startBox?.id === box.id;
     
     return (
       <div
         key={box.id}
-        className={`box ${isSelected ? 'selected' : ''} relative group`}
+        data-box-id={box.id}  // 박스 요소 식별자 추가
+        className={`box ${isSelected ? 'selected' : ''} relative group ${
+          isDrawingArrow ? 'cursor-crosshair' : ''
+        } ${isStartBox ? 'ring-2 ring-blue-500' : ''}`}
         style={{
+          position: 'absolute',
           left: `${box.x}px`,
           top: `${box.y}px`,
           width: `${box.width}px`,
@@ -1252,9 +1363,18 @@ const PDFViewer: React.FC<PDFViewerProps> = ({ file, onFileChange }) => {
           borderWidth: '2px',
           borderStyle: 'solid',
           pointerEvents: isTextSelectable ? 'none' : 'auto',
-          zIndex: isTextSelectable ? 1 : 2
+          zIndex: isSelected ? 3 : 2,
+          backgroundColor: isStartBox ? 'rgba(59, 130, 246, 0.1)' : 'transparent'
         }}
-        onClick={!isTextSelectable ? (e) => handleBoxClick(box) : undefined}
+        onClick={(e) => {
+          e.stopPropagation();
+          e.preventDefault();
+          if (isDrawingArrow) {
+            handleBoxConnection(box);
+          } else if (!isTextSelectable) {
+            handleBoxClick(box);
+          }
+        }}
       >
         {isSelected && !isTextSelectable && (
           <>
@@ -1297,7 +1417,7 @@ const PDFViewer: React.FC<PDFViewerProps> = ({ file, onFileChange }) => {
         )}
       </div>
     );
-  }, [selectedBox, isTextSelectable, handleBoxClick, handleResizeStart, scale]);
+  }, [selectedBox, isTextSelectable, handleBoxClick, isDrawingArrow, startBox]);
 
   // 뷰어 크기 측정
   useEffect(() => {
@@ -1335,6 +1455,40 @@ const PDFViewer: React.FC<PDFViewerProps> = ({ file, onFileChange }) => {
       window.removeEventListener('resize', updateViewerDimensions);
     };
   }, [file, scale]); // scale 변경 시에도 크기 업데이트
+
+  // 페이지 이동 및 박스 포커스 함수 추가
+  const handlePageChange = useCallback((pageNum: number, boxId?: string) => {
+    if (isScrollMode) {
+      // 스크롤 모드일 때는 해당 페이지가 보이도록 visiblePages 업데이트
+      setVisiblePages(prev => {
+        if (!prev.includes(pageNum)) {
+          return [...prev, pageNum].sort((a, b) => a - b);
+        }
+        return prev;
+      });
+
+      // 약간의 지연 후 해당 페이지로 스크롤
+      setTimeout(() => {
+        const pageElement = document.querySelector(`[data-page="${pageNum}"]`);
+        if (pageElement) {
+          pageElement.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+          // 박스 ID가 있으면 박스로 스크롤
+          if (boxId) {
+            setTimeout(() => {
+              const boxElement = document.querySelector(`[data-box-id="${boxId}"]`);
+              if (boxElement) {
+                boxElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+              }
+            }, 500);
+          }
+        }
+      }, 100);
+    } else {
+      // 일반 모드일 때는 페이지 번호만 변경
+      setPageNumber(pageNum);
+    }
+  }, [isScrollMode]);
 
   return (
     <div className="flex flex-col items-center p-4 min-h-screen" ref={viewerRef}>
@@ -1386,44 +1540,47 @@ const PDFViewer: React.FC<PDFViewerProps> = ({ file, onFileChange }) => {
       )}
 
       {/* LayerBoxManager 추가 */}
-      {activeLayer && file && (
-        <DraggablePopup
-          isOpen={isLayerBoxManagerOpen}
+      {isLayerBoxManagerOpen && file && activeLayer && (
+        <LayerBoxManager
+          isOpen={true}
           onClose={() => setIsLayerBoxManagerOpen(false)}
-          title={`${activeLayer.name} 박스 관리`}
-          width="800px"
-          height="80vh"
-        >
-          <LayerBoxManager
-            layer={activeLayer}
-            documentName={file.name}
-            getPageData={getPageData}
-            numPages={numPages}
-            onBoxSelect={(box) => {
-              setSelectedBox(box);
-              setIsBoxDetailOpen(true);
-            }}
-            onBoxDelete={(boxId) => {
-              removeBox(file.name, pageNumber, boxId);
-              redrawAllCanvases(file.name, pageNumber);
-            }}
-            onBoxUpdate={handleBoxUpdate}
-            onBoxesUpload={(boxes) => {
+          layers={layers}
+          activeLayer={activeLayer}
+          selectedBox={selectedBox}
+          onLayerSelect={handleLayerChange}
+          onLayerAdd={handleAddLayer}
+          onLayerDelete={handleLayerDelete}
+          onLayerVisibilityToggle={handleVisibilityToggle}
+          isDrawMode={isDrawMode}
+          onToggleDrawMode={() => setIsDrawMode(!isDrawMode)}
+          isDrawingArrow={isDrawingArrow}
+          onToggleArrowDrawing={() => setIsDrawingArrow(!isDrawingArrow)}
+          connections={connections}
+          onConnectionDelete={handleDeleteConnection}
+          layer={activeLayer}
+          documentName={file.name}
+          getPageData={getPageData}
+          numPages={numPages}
+          onBoxSelect={setSelectedBox}
+          onBoxDelete={handleBoxDelete}
+          onBoxUpdate={handleBoxUpdate}
+          onBoxesUpload={(boxes: Box[]) => {
+            if (file && pageNumber) {
               boxes.forEach(box => {
-                addBox(file.name, box.pageNumber, {
-                  x: box.x,
-                  y: box.y,
-                  width: box.width,
-                  height: box.height,
-                  text: box.text,
-                  type: box.type,
-                  color: box.color
-                });
+                if (box && typeof box === 'object') {
+                  addBox(file.name, pageNumber, box);
+                }
               });
               redrawAllCanvases(file.name, pageNumber);
-            }}
-          />
-        </DraggablePopup>
+            }
+          }}
+          setIsBoxDetailOpen={setIsBoxDetailOpen}
+          setOriginalBox={setOriginalBox}
+          setPageNumber={(pageNum) => handlePageChange(pageNum, selectedBox?.id)}
+          onConnectionAdd={(connection) => {
+            setConnections(prev => [...prev, connection]);
+          }}
+        />
       )}
 
       {/* 박스 상세 정보 팝업 */}

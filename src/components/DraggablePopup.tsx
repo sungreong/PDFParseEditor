@@ -1,3 +1,5 @@
+'use client';
+
 import React, { useState, useRef, useEffect } from 'react';
 
 interface DraggablePopupProps {
@@ -14,8 +16,8 @@ const DraggablePopup: React.FC<DraggablePopupProps> = ({
   onClose,
   title,
   children,
-  width = '500px',
-  height = '400px'
+  width = '90vw',
+  height = '90vh'
 }) => {
   const [position, setPosition] = useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
@@ -107,36 +109,36 @@ const DraggablePopup: React.FC<DraggablePopupProps> = ({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0" style={{ background: 'transparent', pointerEvents: 'none' }}>
+    <div className="fixed inset-0 z-50" style={{ background: 'transparent', pointerEvents: 'none' }}>
       <div
         ref={popupRef}
-        className="fixed bg-white rounded-lg shadow-xl overflow-hidden"
+        className="fixed bg-white rounded-lg shadow-xl overflow-hidden max-w-[95vw] max-h-[95vh]"
         style={{
           left: position.x,
           top: position.y,
           width: size.width,
           height: size.height,
-          minWidth: '400px',
+          minWidth: '280px',
           minHeight: '300px',
           pointerEvents: 'auto'
         }}
       >
         {/* 헤더 */}
         <div
-          className="bg-gray-100 px-4 py-3 cursor-move flex justify-between items-center"
+          className="bg-gray-100 px-2 sm:px-4 py-2 sm:py-3 cursor-move flex justify-between items-center"
           onMouseDown={handleMouseDown}
         >
-          <h2 className="text-lg font-semibold text-gray-800">{title}</h2>
+          <h2 className="text-sm sm:text-base lg:text-lg font-semibold text-gray-800 truncate">{title}</h2>
           <button
             onClick={onClose}
-            className="text-gray-500 hover:text-gray-700 transition-colors"
+            className="text-gray-500 hover:text-gray-700 transition-colors p-1"
           >
             ✕
           </button>
         </div>
 
         {/* 컨텐츠 */}
-        <div className="h-[calc(100%-48px)] overflow-auto">
+        <div className="h-[calc(100%-40px)] sm:h-[calc(100%-48px)] overflow-auto">
           {children}
         </div>
 
