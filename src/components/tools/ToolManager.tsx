@@ -58,6 +58,26 @@ const ToolManager: React.FC<ToolManagerProps> = ({ toolState, toolActions }) => 
           toolActions.onToggleDrawMode();
         }
       }
+    },
+    {
+      id: 'multiSelect',
+      name: '박스 다중 선택',
+      icon: (
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          className="h-5 w-5"
+          viewBox="0 0 20 20"
+          fill="currentColor"
+        >
+          <path d="M7 2a2 2 0 012 2v12a2 2 0 01-2 2H3a2 2 0 01-2-2V4a2 2 0 012-2h4zm0 1H3a1 1 0 00-1 1v12a1 1 0 001 1h4a1 1 0 001-1V4a1 1 0 00-1-1zm7-1a2 2 0 012 2v12a2 2 0 01-2 2h-4a2 2 0 01-2-2V4a2 2 0 012-2h4zm0 1h-4a1 1 0 00-1 1v12a1 1 0 001 1h4a1 1 0 001-1V4a1 1 0 00-1-1z" />
+        </svg>
+      ),
+      isActive: toolState.isMultiSelectMode,
+      onClick: () => {
+        toolActions.onToggleMultiSelect();
+        if (toolState.isDrawMode) toolActions.onToggleDrawMode();
+        if (toolState.isDrawingArrow) toolActions.onToggleArrowDrawing();
+      }
     }
   ];
 

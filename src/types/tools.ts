@@ -1,3 +1,5 @@
+import type { Box } from '@/hooks/useLayerManager';
+
 export type ToolType = 'draw' | 'connect';
 
 export interface Tool {
@@ -9,14 +11,27 @@ export interface Tool {
   description?: string;
 }
 
+export interface Point {
+  x: number;
+  y: number;
+}
+
 export interface ToolState {
   isDrawMode: boolean;
   isDrawingArrow: boolean;
-  startBox: any | null;
+  isMultiSelectMode: boolean;
+  startBox: Box | null;
+  selectedBoxes: string[];
+  selectionCoords?: {
+    start: Point;
+    end: Point;
+  } | null;
 }
 
-export interface ToolActions {
+export type ToolActions = {
   onToggleDrawMode: () => void;
   onToggleArrowDrawing: () => void;
-  setStartBox: (box: any | null) => void;
+  onToggleMultiSelect: () => void;
+  setStartBox: (box: Box | null) => void;
+  setSelectedBoxes: (boxes: string[]) => void;
 } 

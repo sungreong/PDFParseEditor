@@ -5,7 +5,8 @@ import { useDropzone } from 'react-dropzone';
 import { Document, Page, pdfjs } from 'react-pdf';
 import useWindowSize from '@/hooks/useWindowSize';
 import { useLayerManager } from '../hooks/useLayerManager';
-import type { Layer, Box } from '../hooks/useLayerManager';
+import type { Layer, Box, Point } from '../types';
+import type { ToolState, ToolActions } from '../types/tools';
 import 'react-pdf/dist/esm/Page/TextLayer.css';
 import 'react-pdf/dist/esm/Page/AnnotationLayer.css';
 import Sidebar from './Sidebar';
@@ -14,6 +15,7 @@ import BoxDetailEditor from './BoxDetailEditor';
 import LayerBoxManager from './LayerBoxManager';
 import html2canvas from 'html2canvas';
 import { usePDFUpload } from '../hooks/usePDFUpload';
+import { useMultiSelect } from '../hooks/useMultiSelect';
 
 // PDF.js 워커 설정
 pdfjs.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjs.version}/pdf.worker.js`;
@@ -268,6 +270,49 @@ const PDFViewer: React.FC<PDFViewerProps> = ({ file, onFileChange }) => {
   const [connections, setConnections] = useState<Connection[]>([]);
   const [startBox, setStartBox] = useState<Box | null>(null);
 
+  // 다중 선택 관련 상태 추가
+  const [isMultiSelectMode, setIsMultiSelectMode] = useState(false);
+  const [selectedBoxes, setSelectedBoxes] = useState<Box[]>([]);
+  const [selectionStart, setSelectionStart] = useState<Point | null>(null);
+  const [selectionEnd, setSelectionEnd] = useState<Point | null>(null);
+
+  // 박스 선택 토글 함수
+  const toggleBoxSelection = useCallback((box: Box) => {
+    setSelectedBoxes(prev => {
+      const isSelected = prev.some(b => b.id === box.id);
+      if (isSelected) {
+        return prev.filter(b => b.id !== box.id);
+      }
+      return [...prev, box];
+    });
+  }, []);
+
+  // 다중 선택 모드 토글 함수
+  const handleToggleMultiSelect = useCallback(() => {
+    setIsMultiSelectMode(prev => !prev);
+    if (isDrawMode) setIsDrawMode(false);
+    if (isDrawingArrow) setIsDrawingArrow(false);
+    setSelectedBoxes([]);
+  }, [isDrawMode, isDrawingArrow]);
+
+  // 그리기 모드 토글 함수
+  const handleToggleDrawMode = useCallback(() => {
+    setIsDrawMode(prev => !prev);
+    if (isMultiSelectMode) {
+      setIsMultiSelectMode(false);
+      setSelectedBoxes([]);
+    }
+  }, [isMultiSelectMode]);
+
+  // 화살표 그리기 모드 토글 함수
+  const handleToggleArrowDrawing = useCallback(() => {
+    setIsDrawingArrow(prev => !prev);
+    if (isMultiSelectMode) {
+      setIsMultiSelectMode(false);
+      setSelectedBoxes([]);
+    }
+  }, [isMultiSelectMode]);
+
   // PDF 크기 계산
   const pdfDimensions = useMemo(() => {
     const maxHeight = windowSize.height * 0.8;
@@ -460,13 +505,17 @@ const PDFViewer: React.FC<PDFViewerProps> = ({ file, onFileChange }) => {
 
     setStartPoint(null);
     setCurrentBox(null);
-  }, [isDrawMode, startPoint, currentBox, activeLayer, file, pageNumber, addBox, setSelectedBox, pdfDimensions.width]);
+  }, [isDrawMode, startPoint, currentBox, activeLayer, file, pageNumber, addBox, setSelectedBox]);
 
   // 박스 클릭 이벤트 핸들러
   const handleBoxClick = useCallback((box: Box) => {
-    setSelectedBox(box);
-    setIsBoxDetailOpen(true);
-  }, [setSelectedBox]);
+    if (isMultiSelectMode) {
+      toggleBoxSelection(box);
+    } else {
+      setSelectedBox(box);
+      setIsBoxDetailOpen(true);
+    }
+  }, [isMultiSelectMode, toggleBoxSelection, setSelectedBox]);
 
   // 텍스트 추출 함수 수정
   const extractTextFromBox = useCallback((box: Box) => {
@@ -897,6 +946,10 @@ const PDFViewer: React.FC<PDFViewerProps> = ({ file, onFileChange }) => {
           height: isScrollMode ? pdfDimensions.height : 'auto',
           minHeight: isScrollMode ? pdfDimensions.height : 'auto'
         }}
+        onMouseDown={handleMultiSelectStart}
+        onMouseMove={handleMultiSelectMove}
+        onMouseUp={handleMultiSelectEnd}
+        onMouseLeave={handleMultiSelectEnd}
       >
         <div 
           className={`pdf-page ${isTextSelectable ? 'selectable' : ''} relative`}
@@ -967,6 +1020,8 @@ const PDFViewer: React.FC<PDFViewerProps> = ({ file, onFileChange }) => {
             if (!layer?.isVisible) return null;
             return renderBox(box, layer);
           })}
+          {/* 선택 영역 렌더링 */}
+          {isMultiSelectMode && renderSelectionArea()}
         </div>
       </div>
     );
@@ -1490,6 +1545,117 @@ const PDFViewer: React.FC<PDFViewerProps> = ({ file, onFileChange }) => {
     }
   }, [isScrollMode]);
 
+  // 다중 선택 관련 함수들
+  const handleMultiSelectStart = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    if (!isMultiSelectMode) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = (e.clientX - rect.left) / scale;
+    const y = (e.clientY - rect.top) / scale;
+    setSelectionStart({ x, y });
+    setSelectionEnd({ x, y });
+  }, [isMultiSelectMode, scale]);
+
+  const handleMultiSelectMove = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    if (!isMultiSelectMode || !selectionStart) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = (e.clientX - rect.left) / scale;
+    const y = (e.clientY - rect.top) / scale;
+    setSelectionEnd({ x, y });
+  }, [isMultiSelectMode, selectionStart, scale]);
+
+  const handleMultiSelectEnd = useCallback(() => {
+    if (!isMultiSelectMode || !file || !pageNumber || !selectionStart || !selectionEnd) return;
+
+    const pageData = getPageData(file.name, pageNumber);
+    if (!pageData) return;
+
+    // 선택 영역 계산
+    const left = Math.min(selectionStart.x, selectionEnd.x);
+    const top = Math.min(selectionStart.y, selectionEnd.y);
+    const right = Math.max(selectionStart.x, selectionEnd.x);
+    const bottom = Math.max(selectionStart.y, selectionEnd.y);
+
+    // 선택 영역 내의 박스들 찾기
+    const selectedBoxes = pageData.boxes.filter(box => {
+      const boxRight = box.x + box.width;
+      const boxBottom = box.y + box.height;
+      
+      return (
+        box.x < right &&
+        boxRight > left &&
+        box.y < bottom &&
+        boxBottom > top &&
+        (!activeLayer || box.layerId === activeLayer.id)
+      );
+    });
+
+    setSelectedBoxes(selectedBoxes);
+    setSelectionStart(null);
+    setSelectionEnd(null);
+  }, [isMultiSelectMode, file, pageNumber, selectionStart, selectionEnd, getPageData, activeLayer]);
+
+  // 선택 영역 렌더링
+  const renderSelectionArea = () => {
+    if (!selectionStart || !selectionEnd) return null;
+
+    const left = Math.min(selectionStart.x, selectionEnd.x);
+    const top = Math.min(selectionStart.y, selectionEnd.y);
+    const width = Math.abs(selectionEnd.x - selectionStart.x);
+    const height = Math.abs(selectionEnd.y - selectionStart.y);
+
+    return (
+      <div
+        className="absolute border-2 border-blue-500 bg-blue-100 opacity-30"
+        style={{
+          left: `${left}px`,
+          top: `${top}px`,
+          width: `${width}px`,
+          height: `${height}px`,
+          pointerEvents: 'none',
+          zIndex: 3
+        }}
+      />
+    );
+  };
+
+  // 다중 선택 모드 토글 버튼 추가
+  const renderToolbar = () => {
+    return (
+      <div className="fixed bottom-4 left-1/2 transform -translate-x-1/2 bg-white rounded-lg shadow-lg p-2 flex gap-2 z-50">
+        <button
+          onClick={handleToggleMultiSelect}
+          className={`px-4 py-2 rounded-lg transition-colors ${
+            isMultiSelectMode 
+              ? 'bg-blue-500 text-white' 
+              : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+          }`}
+        >
+          다중 선택 모드
+        </button>
+        <button
+          onClick={handleToggleDrawMode}
+          className={`px-4 py-2 rounded-lg transition-colors ${
+            isDrawMode 
+              ? 'bg-blue-500 text-white' 
+              : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+          }`}
+        >
+          그리기 모드
+        </button>
+        <button
+          onClick={handleToggleArrowDrawing}
+          className={`px-4 py-2 rounded-lg transition-colors ${
+            isDrawingArrow 
+              ? 'bg-blue-500 text-white' 
+              : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+          }`}
+        >
+          화살표 그리기
+        </button>
+      </div>
+    );
+  };
+
   return (
     <div className="flex flex-col items-center p-4 min-h-screen" ref={viewerRef}>
       <div
@@ -1536,6 +1702,7 @@ const PDFViewer: React.FC<PDFViewerProps> = ({ file, onFileChange }) => {
           </div>
           {renderLayerTab()}
           {renderSidebar()}
+          {renderToolbar()}
         </div>
       )}
 
