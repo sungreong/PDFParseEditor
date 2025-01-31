@@ -22,18 +22,19 @@ export interface Layer {
 
 export interface Box {
   id: string;
-  layerId: string;
-  pageNumber: number;
   x: number;
   y: number;
   width: number;
   height: number;
-  type: string;
+  pageNumber: number;
+  layerId: string;
+  type: 'box' | 'group';
   color?: string;
   text?: string;
   metadata?: {
-    createdAt: string;
-    updatedAt: string;
+    createdAt?: string;
+    updatedAt?: string;
+    [key: string]: any;
   };
 }
 
@@ -46,7 +47,11 @@ export interface Connection {
   id: string;
   startBox: Box;
   endBox: Box;
+  type: string;
   layerId: string;
+  metadata?: {
+    [key: string]: any;
+  };
 }
 
 export interface PageData {
@@ -73,8 +78,6 @@ export interface GroupBox {
 }
 
 export interface DocumentPageData {
-  layers: Layer[];
   boxes: Box[];
-  canvases: Canvas[];
-  groupBoxes: GroupBox[];
+  connections: Connection[];
 } 

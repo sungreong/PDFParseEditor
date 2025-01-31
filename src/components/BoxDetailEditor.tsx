@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import type { Box } from '../hooks/useLayerManager';
+import type { Box } from '@/hooks/useLayerManager';
 import ReactMarkdown from 'react-markdown';
 import { PDFDocumentProxy } from 'pdfjs-dist';
 import { API_ENDPOINTS } from '../config/api';
+import DraggablePopup, { DraggablePopupProps } from '@/components/common/DraggablePopup';
 
 interface BoxDetailEditorProps {
   box: Box;
@@ -14,6 +15,9 @@ interface BoxDetailEditorProps {
   viewerWidth: number;
   viewerHeight: number;
   layers: { id: string; name: string; color: string }[];
+  isOpen: boolean;
+  position?: { x: number; y: number };
+  onPositionChange?: (position: { x: number; y: number }) => void;
 }
 
 interface CollapsibleSectionProps {
@@ -30,16 +34,16 @@ const CollapsibleSection: React.FC<CollapsibleSectionProps> = ({
   const [isOpen, setIsOpen] = useState(defaultOpen);
 
   return (
-    <div className="border rounded-lg mb-4">
+    <div className="border border-gray-200 rounded-lg mb-4 overflow-hidden shadow-sm">
       <button
         onClick={() => setIsOpen(!isOpen)}
-        className="w-full px-4 py-2 flex justify-between items-center bg-gray-50 hover:bg-gray-100 transition-colors rounded-t-lg"
+        className="w-full px-4 py-3 flex justify-between items-center bg-gray-50 hover:bg-gray-100 transition-colors"
       >
-        <span className="font-medium text-gray-700">{title}</span>
-        <span className="text-gray-500">{isOpen ? '▼' : '▶'}</span>
+        <span className="font-medium text-gray-800">{title}</span>
+        <span className="text-gray-500 transform transition-transform duration-200" style={{ transform: isOpen ? 'rotate(180deg)' : 'none' }}>▼</span>
       </button>
       {isOpen && (
-        <div className="p-4 border-t">
+        <div className="p-4 bg-white border-t border-gray-200">
           {children}
         </div>
       )}
@@ -56,7 +60,10 @@ const BoxDetailEditor: React.FC<BoxDetailEditorProps> = ({
   documentName,
   viewerWidth,
   viewerHeight,
-  layers
+  layers,
+  isOpen,
+  position,
+  onPositionChange
 }) => {
   const [editedData, setEditedData] = useState({
     color: box.color || '',
@@ -451,8 +458,22 @@ const BoxDetailEditor: React.FC<BoxDetailEditorProps> = ({
   };
 
   const captureBoxArea = useCallback(async () => {
+    if (!box || !documentName || !pageNumber) {
+      console.warn('필수 정보가 누락되었습니다:', { box, documentName, pageNumber });
+      return;
+    }
+
     try {
       setIsCapturing(true);
+      console.log('캡처 요청 데이터:', {
+        id: box.id,
+        x: box.x,
+        y: box.y,
+        width: box.width,
+        height: box.height,
+        viewer_width: viewerWidth,
+        viewer_height: viewerHeight,
+      });
 
       const response = await fetch(API_ENDPOINTS.CAPTURE_BOX(documentName, pageNumber), {
         method: 'POST',
@@ -460,22 +481,26 @@ const BoxDetailEditor: React.FC<BoxDetailEditorProps> = ({
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          id: box.id,
-          x: box.x,
-          y: box.y,
-          width: box.width,
-          height: box.height,
-          viewer_width: viewerWidth,
-          viewer_height: viewerHeight,
+          box_id: box.id,
+          x: Math.round(box.x),
+          y: Math.round(box.y),
+          width: Math.round(box.width),
+          height: Math.round(box.height),
+          viewer_width: Math.round(viewerWidth),
+          viewer_height: Math.round(viewerHeight),
         }),
       });
 
       if (!response.ok) {
-        const errorData = await response.json().catch(() => null);
-        throw new Error(errorData?.detail || '캡처 요청 실패');
+        const errorData = await response.json().catch(() => ({ detail: '알 수 없는 오류가 발생했습니다.' }));
+        throw new Error(errorData.detail || '캡처 요청 실패');
       }
 
       const blob = await response.blob();
+      if (blob.size === 0) {
+        throw new Error('빈 이미지가 반환되었습니다.');
+      }
+
       const imageUrl = URL.createObjectURL(blob);
       setBoxImage(imageUrl);
     } catch (error) {
@@ -484,133 +509,162 @@ const BoxDetailEditor: React.FC<BoxDetailEditorProps> = ({
     } finally {
       setIsCapturing(false);
     }
-  }, [box, pageNumber, documentName, viewerWidth, viewerHeight]);
+  }, [box?.id, box?.x, box?.y, box?.width, box?.height, pageNumber, documentName, viewerWidth, viewerHeight]);
 
   useEffect(() => {
-    // 페이지가 완전히 렌더링된 후 캡처 시도
+    if (!isOpen) return;
+    
     const timer = setTimeout(() => {
       captureBoxArea();
     }, 1000);
 
-    return () => clearTimeout(timer);
-  }, [box, pageNumber, documentName, captureBoxArea]);
+    return () => {
+      clearTimeout(timer);
+      // 이전 이미지 URL 정리
+      if (boxImage) {
+        URL.revokeObjectURL(boxImage);
+      }
+    };
+  }, [isOpen, captureBoxArea, boxImage]);
 
   return (
-    <div className="flex h-full">
-      {/* PDF 영역 이미지 인덱스 */}
-      <div className="relative">
-        <div 
-          className={`absolute left-0 transform -translate-x-full bg-white rounded-l-lg shadow-lg transition-all duration-300 ${
-            isImageExpanded ? 'w-[300px]' : 'w-[40px] cursor-pointer hover:bg-gray-50'
-          }`}
-          style={{
-            top: '0',
-            height: isImageExpanded ? '300px' : '120px',
-            borderWidth: '1px 0 1px 1px',
-            borderColor: '#e5e7eb',
-          }}
-          onClick={() => !isImageExpanded && setIsImageExpanded(true)}
-        >
-          {isImageExpanded ? (
-            <div className="h-full p-2">
-              <div className="flex justify-between items-center mb-2 px-2">
-                <span className="text-sm font-medium">PDF 영역</span>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setIsImageExpanded(false);
-                  }}
-                  className="text-gray-500 hover:text-gray-700"
-                >
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
-                  </svg>
-                </button>
-              </div>
-              {boxImage ? (
-                <div className="relative h-[calc(100%-2rem)] overflow-hidden">
-                  <img
-                    src={boxImage}
-                    alt="PDF 영역"
-                    className="w-full h-full object-contain"
-                  />
-                  <div className="absolute bottom-0 left-0 right-0 bg-black bg-opacity-50 text-white text-xs p-1">
-                    <div className="flex justify-between">
-                      <span>Page {pageNumber}</span>
-                      <span>{Math.round(box.width)} × {Math.round(box.height)}</span>
-                    </div>
-                  </div>
-                </div>
-              ) : (
-                <div className="flex items-center justify-center h-full text-gray-500 text-sm">
-                  이미지를 불러오는 중...
-                </div>
-              )}
-            </div>
-          ) : (
-            <div className="h-full flex flex-col items-center justify-center p-2 text-gray-600">
-              <div className="w-full aspect-square mb-2">
-                {boxImage ? (
-                  <img
-                    src={boxImage}
-                    alt="PDF 영역 미리보기"
-                    className="w-full h-full object-cover rounded"
-                  />
-                ) : (
-                  <div className="w-full h-full bg-gray-100 rounded flex items-center justify-center">
-                    <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+    <DraggablePopup
+      isOpen={isOpen}
+      onClose={() => onCancel?.()}
+      title={`박스 상세 정보 - ${box.text?.substring(0, 30) || '텍스트 없음'}${box.text && box.text.length > 30 ? '...' : ''}`}
+      width="600px"
+      height="600px"
+      zIndex={100}
+      position={position}
+      onPositionChange={onPositionChange}
+    >
+      <div className="flex h-full bg-gray-50">
+        {/* PDF 영역 이미지 인덱스 */}
+        <div className="relative">
+          <div 
+            className={`absolute left-0 transform -translate-x-full bg-white rounded-l-lg shadow-md transition-all duration-300 ${
+              isImageExpanded ? 'w-[320px]' : 'w-[48px] cursor-pointer hover:bg-gray-50'
+            }`}
+            style={{
+              top: '16px',
+              height: isImageExpanded ? '360px' : '140px',
+              borderWidth: '1px 0 1px 1px',
+              borderColor: 'rgb(229 231 235)',
+            }}
+            onClick={() => !isImageExpanded && setIsImageExpanded(true)}
+          >
+            {isImageExpanded ? (
+              <div className="h-full flex flex-col">
+                <div className="flex justify-between items-center p-3 border-b">
+                  <span className="text-sm font-semibold text-gray-700">PDF 영역</span>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setIsImageExpanded(false);
+                    }}
+                    className="p-1 rounded-full hover:bg-gray-100 text-gray-500 hover:text-gray-700 transition-colors"
+                  >
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
                     </svg>
-                  </div>
-                )}
+                  </button>
+                </div>
+                <div className="flex-1 p-3 overflow-hidden">
+                  {boxImage ? (
+                    <div className="relative h-full rounded-lg overflow-hidden border border-gray-200">
+                      <img
+                        src={boxImage}
+                        alt="PDF 영역"
+                        className="w-full h-full object-contain bg-gray-50"
+                      />
+                      <div className="absolute bottom-0 left-0 right-0 bg-black bg-opacity-60 text-white text-xs p-2">
+                        <div className="flex justify-between items-center">
+                          <span>Page {pageNumber}</span>
+                          <span>{Math.round(box.width)} × {Math.round(box.height)}</span>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex items-center justify-center h-full text-gray-500 text-sm bg-gray-50 rounded-lg border border-gray-200">
+                      <div className="flex flex-col items-center gap-2">
+                        <svg className="w-8 h-8 text-gray-400 animate-spin" fill="none" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                        </svg>
+                        <span>이미지를 불러오는 중...</span>
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
-              <span className="text-xs whitespace-nowrap transform -rotate-90">PDF 영역</span>
-            </div>
-          )}
+            ) : (
+              <div className="h-full flex flex-col items-center justify-center p-2 text-gray-600">
+                <div className="w-full aspect-square mb-2 overflow-hidden rounded-lg border border-gray-200">
+                  {boxImage ? (
+                    <img
+                      src={boxImage}
+                      alt="PDF 영역 미리보기"
+                      className="w-full h-full object-cover"
+                    />
+                  ) : (
+                    <div className="w-full h-full bg-gray-50 flex items-center justify-center">
+                      <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                      </svg>
+                    </div>
+                  )}
+                </div>
+                <span className="text-xs font-medium whitespace-nowrap transform -rotate-90">PDF 영역</span>
+              </div>
+            )}
+          </div>
         </div>
-      </div>
 
-      {/* 메인 컨텐츠 */}
-      <div className="flex-1 flex flex-col h-full">
-        {/* 탭 헤더 */}
-        <div className="flex border-b">
-          {tabs.map(tab => (
+        {/* 메인 컨텐츠 */}
+        <div className="flex-1 flex flex-col h-full bg-white">
+          {/* 탭 헤더 */}
+          <div className="flex border-b bg-white sticky top-0 z-10">
+            {tabs.map(tab => (
+              <button
+                key={tab.id}
+                onClick={() => setActiveTab(tab.id)}
+                className={`px-6 py-3 text-sm font-medium transition-all relative ${
+                  activeTab === tab.id
+                    ? 'text-blue-600'
+                    : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'
+                }`}
+              >
+                {tab.label}
+                {activeTab === tab.id && (
+                  <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-blue-600" />
+                )}
+              </button>
+            ))}
+          </div>
+
+          {/* 탭 컨텐츠 */}
+          <div className="flex-1 overflow-y-auto p-6 bg-white">
+            {renderTabContent()}
+          </div>
+
+          {/* 하단 버튼 */}
+          <div className="flex justify-end gap-3 p-4 border-t bg-white sticky bottom-0 z-10">
             <button
-              key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
-              className={`px-4 py-2 text-sm font-medium transition-colors ${
-                activeTab === tab.id
-                  ? 'text-blue-600 border-b-2 border-blue-600'
-                  : 'text-gray-500 hover:text-gray-700'
-              }`}
+              onClick={onCancel}
+              className="px-5 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 transition-colors"
             >
-              {tab.label}
+              취소
             </button>
-          ))}
-        </div>
-
-        {/* 탭 컨텐츠 */}
-        <div className="flex-1 overflow-y-auto p-4">
-          {renderTabContent()}
-        </div>
-
-        {/* 하단 버튼 */}
-        <div className="flex justify-end gap-2 p-4 border-t">
-          <button
-            onClick={onCancel}
-            className="px-4 py-2 border rounded hover:bg-gray-100"
-          >
-            취소
-          </button>
-          <button
-            onClick={handleSave}
-            className="px-4 py-2 rounded bg-blue-500 hover:bg-blue-600 text-white transition-colors"
-          >
-            저장
-          </button>
+            <button
+              onClick={handleSave}
+              className="px-5 py-2 rounded-lg bg-blue-500 hover:bg-blue-600 text-white transition-colors"
+            >
+              저장
+            </button>
+          </div>
         </div>
       </div>
-    </div>
+    </DraggablePopup>
   );
 };
 

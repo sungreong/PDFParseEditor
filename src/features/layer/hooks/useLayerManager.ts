@@ -3,6 +3,32 @@ import { v4 as uuidv4 } from 'uuid';
 import type { Box, DocumentPageData } from '../types';
 import type { Layer as BaseLayer } from '../types';
 
+export interface Box {
+  id: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  pageNumber: number;
+  layerId: string;
+  type: 'box' | 'group';
+  color?: string;
+  text?: string;
+  metadata?: {
+    createdAt?: string;
+    updatedAt?: string;
+    [key: string]: any;
+  };
+}
+
+export interface Layer {
+  id: string;
+  name: string;
+  color: string;
+  isVisible: boolean;
+  boxes: Box[];
+}
+
 export type Layer = BaseLayer;
 
 interface PageData {

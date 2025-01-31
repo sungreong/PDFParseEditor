@@ -15,6 +15,7 @@ import { LayerBoxManager } from '@/features/layer/components/LayerBoxManager';
 import useWindowSize from '@/hooks/useWindowSize';
 import 'react-pdf/dist/esm/Page/TextLayer.css';
 import 'react-pdf/dist/esm/Page/AnnotationLayer.css';
+import BoxEditor from '@/features/box/components/BoxEditor';
 
 // PDF.js 워커 설정
 pdfjs.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjs.version}/pdf.worker.js`;
@@ -69,6 +70,8 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
   const [isBoxDetailOpen, setIsBoxDetailOpen] = useState(false);
   const [originalBox, setOriginalBox] = useState<Box | null>(null);
   const [pageRefs, setPageRefs] = useState<{ [key: number]: HTMLDivElement | null }>({});
+  const [isBoxEditorOpen, setIsBoxEditorOpen] = useState(false);
+  const [editingBox, setEditingBox] = useState<Box | null>(null);
 
   // 문서 관리
   const {
@@ -590,58 +593,38 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
 
   // 박스 업데이트 핸들러 수정
   const handleUpdateBox = useCallback((boxId: string, updates: Partial<Box>) => {
-    if (!file || !selectedBox) return;
+    if (!file || !activeLayer) return;
     
-    const pageNum = selectedBox.pageNumber;
-    const box = boxesByPage.get(pageNum)?.find(b => b.id === boxId);
-    if (box) {
-      const updatedBox = { ...box, ...updates };
-      updateBoxesByPage(updatedBox, 'update');
+    console.log('UpdateBox - Attempting to update box:', {
+      boxId,
+      updates,
+      fileName: file.name,
+      activeLayerId: activeLayer.id
+    });
+
+    try {
       updateBox(boxId, updates);
+      setIsBoxEditorOpen(false);
+      setEditingBox(null);
       redrawAllCanvases();
+    } catch (error) {
+      console.error('UpdateBox - Error updating box:', error);
     }
-  }, [file, selectedBox, boxesByPage, updateBoxesByPage, updateBox, redrawAllCanvases]);
+  }, [file, activeLayer, updateBox, redrawAllCanvases]);
 
   // 페이지 변경 시 데이터 초기화 확인
   const handlePageChange = useCallback((newPage: number) => {
-    if (newPage < 1 || newPage > numPages) {
-      console.log('PageChange - Invalid page number:', { newPage, numPages });
-      return;
-    }
+    const validatedPage = Math.max(1, Math.min(newPage, numPages));
+    if (validatedPage === pageNumber) return;
     
-    console.log('PageChange - Changing to page:', { 
-      from: pageNumber, 
-      to: newPage 
+    console.log('PageChange - Changing to page:', {
+      from: pageNumber,
+      to: validatedPage,
+      numPages
     });
     
-    if (file) {
-      // 페이지 데이터 확인
-      const pageData = getPageData(file.name, newPage);
-      console.log('PageChange - Current page data:', { 
-        pageNumber: newPage, 
-        hasPageData: !!pageData,
-        boxesCount: pageData?.boxes.length 
-      });
-
-      // 페이지 데이터가 없으면 초기화
-      if (!pageData) {
-        console.log('PageChange - Initializing new page data:', newPage);
-        initializeDocumentPage(file.name, newPage);
-      }
-
-      // 현재 그리기 중인 박스가 있다면 초기화
-      if (currentBox || startPoint) {
-        console.log('PageChange - Resetting drawing state');
-        setCurrentBox(null);
-        setStartPoint(null);
-      }
-    }
-
-    setPageNumber(newPage);
-    
-    // 페이지 변경 후 캔버스 다시 그리기
-    redrawAllCanvases();
-  }, [file, numPages, pageNumber, currentBox, startPoint, initializeDocumentPage, getPageData, redrawAllCanvases]);
+    setPageNumber(validatedPage);
+  }, [pageNumber, numPages]);
 
   // PDF 로드 완료 시 모든 페이지 데이터 초기화
   const handlePDFLoadSuccess = useCallback(({ numPages }: { numPages: number }) => {
@@ -701,6 +684,12 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
       container.removeEventListener('scroll', handleScroll);
     };
   }, [isScrollMode, setVisiblePages]);
+
+  // 박스 편집 핸들러
+  const handleEditBox = useCallback((box: Box) => {
+    setEditingBox(box);
+    setIsBoxEditorOpen(true);
+  }, []);
 
   return (
     <div className="flex flex-col items-center p-4 min-h-screen" ref={containerRef}>
@@ -914,19 +903,47 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
                         <div className="flex items-center justify-between">
                           <span className="text-sm">확대/축소</span>
                           <div className="flex items-center gap-2">
-                            <button
-                              onClick={() => setScale(prev => Math.max(0.5, prev - 0.1))}
-                              className="px-2 py-1 bg-gray-100 rounded"
+                            <select
+                              value={Math.round(scale * 100)}
+                              onChange={(e) => {
+                                const value = parseInt(e.target.value);
+                                setScale(value / 100);
+                              }}
+                              className="px-2 py-1 border rounded text-sm"
                             >
-                              -
-                            </button>
-                            <span className="text-sm">{Math.round(scale * 100)}%</span>
-                            <button
-                              onClick={() => setScale(prev => Math.min(2, prev + 0.1))}
-                              className="px-2 py-1 bg-gray-100 rounded"
-                            >
-                              +
-                            </button>
+                              <option value="50">50%</option>
+                              <option value="75">75%</option>
+                              <option value="100">100%</option>
+                              <option value="125">125%</option>
+                              <option value="150">150%</option>
+                              <option value="175">175%</option>
+                              <option value="200">200%</option>
+                            </select>
+                            <div className="flex gap-1 ml-2">
+                              <button
+                                onClick={() => setScale(prev => Math.max(0.5, prev - 0.25))}
+                                className="px-2 py-1 bg-gray-100 rounded hover:bg-gray-200"
+                                title="25% 축소"
+                              >
+                                -
+                              </button>
+                              <button
+                                onClick={() => setScale(prev => Math.min(2, prev + 0.25))}
+                                className="px-2 py-1 bg-gray-100 rounded hover:bg-gray-200"
+                                title="25% 확대"
+                              >
+                                +
+                              </button>
+                            </div>
+                            <div className="flex gap-1 ml-2">
+                              <button
+                                onClick={() => setScale(1)}
+                                className="px-2 py-1 bg-gray-100 rounded hover:bg-gray-200 text-xs"
+                                title="기본 크기로 설정 (100%)"
+                              >
+                                맞춤
+                              </button>
+                            </div>
                           </div>
                         </div>
                         <div className="flex items-center justify-between">
@@ -957,10 +974,10 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
                               </span>
                               <div className="flex gap-1">
                                 <button
-                                  onClick={() => setSelectedBox(box)}
+                                  onClick={() => handleEditBox(box)}
                                   className="text-blue-500 hover:text-blue-700 text-xs"
                                 >
-                                  보기
+                                  수정
                                 </button>
                                 <button
                                   onClick={() => handleRemoveBox(box.id)}
@@ -1044,50 +1061,95 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
           </div>
 
           {/* 도구 모음 - 메인 콘텐츠 밖으로 이동 */}
-          <div className="fixed bottom-4 left-1/2 transform -translate-x-1/2 bg-white rounded-lg shadow-lg p-2 flex gap-2 z-[60]">
-            <div className="flex items-center gap-2">
+          <div className="fixed bottom-4 left-1/2 transform -translate-x-1/2 bg-white rounded-lg shadow-xl p-3 flex gap-3 z-[9999]">
+            <div className="flex items-center gap-3 border-r pr-3">
               <button
                 onClick={toolActions.onToggleDrawMode}
-                className={`px-4 py-2 rounded ${toolState.isDrawMode ? 'bg-blue-500 text-white' : 'bg-gray-100'}`}
+                className={`px-4 py-2 rounded-lg flex items-center gap-2 ${
+                  toolState.isDrawMode 
+                    ? 'bg-blue-500 text-white hover:bg-blue-600' 
+                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                } transition-colors`}
               >
-                박스 그리기
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 13h6m-3-3v6m5 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+                <span>박스 그리기</span>
               </button>
               <button
                 onClick={() => setIsDrawingArrow(!isDrawingArrow)}
-                className={`px-4 py-2 rounded ${isDrawingArrow ? 'bg-blue-500 text-white' : 'bg-gray-100'}`}
+                className={`px-4 py-2 rounded-lg flex items-center gap-2 ${
+                  isDrawingArrow 
+                    ? 'bg-blue-500 text-white hover:bg-blue-600' 
+                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                } transition-colors`}
               >
-                연결선 그리기
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 8l4 4m0 0l-4 4m4-4H3" />
+                </svg>
+                <span>연결선 그리기</span>
               </button>
               <button
                 onClick={toolActions.onToggleMultiSelect}
-                className={`px-4 py-2 rounded ${toolState.isMultiSelectMode ? 'bg-blue-500 text-white' : 'bg-gray-100'}`}
+                className={`px-4 py-2 rounded-lg flex items-center gap-2 ${
+                  toolState.isMultiSelectMode 
+                    ? 'bg-blue-500 text-white hover:bg-blue-600' 
+                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                } transition-colors`}
               >
-                다중 선택
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 5h16M4 12h16m-7 7h7" />
+                </svg>
+                <span>다중 선택</span>
               </button>
               <button
                 onClick={() => setIsTextSelectable(!isTextSelectable)}
-                className={`px-4 py-2 rounded ${isTextSelectable ? 'bg-blue-500 text-white' : 'bg-gray-100'}`}
+                className={`px-4 py-2 rounded-lg flex items-center gap-2 ${
+                  isTextSelectable 
+                    ? 'bg-blue-500 text-white hover:bg-blue-600' 
+                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                } transition-colors`}
               >
-                텍스트 선택
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+                <span>텍스트 선택</span>
               </button>
             </div>
-            <div className="h-full w-px bg-gray-200 mx-2" />
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-3">
               <button
                 onClick={() => setScale(prev => Math.max(0.5, prev - 0.1))}
-                className="px-3 py-2 bg-gray-100 rounded hover:bg-gray-200"
+                className="px-3 py-2 bg-gray-100 rounded-lg hover:bg-gray-200 text-gray-700 flex items-center gap-2"
               >
-                축소
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M20 12H4" />
+                </svg>
+                <span>축소</span>
               </button>
-              <span className="min-w-[60px] text-center">{Math.round(scale * 100)}%</span>
+              <span className="min-w-[80px] text-center font-medium">{Math.round(scale * 100)}%</span>
               <button
                 onClick={() => setScale(prev => Math.min(2, prev + 0.1))}
-                className="px-3 py-2 bg-gray-100 rounded hover:bg-gray-200"
+                className="px-3 py-2 bg-gray-100 rounded-lg hover:bg-gray-200 text-gray-700 flex items-center gap-2"
               >
-                확대
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4" />
+                </svg>
+                <span>확대</span>
               </button>
             </div>
           </div>
+
+          {/* 박스 편집기 */}
+          {isBoxEditorOpen && editingBox && (
+            <BoxEditor
+              box={editingBox}
+              onSave={(updates) => handleUpdateBox(editingBox.id, updates)}
+              onCancel={() => {
+                setIsBoxEditorOpen(false);
+                setEditingBox(null);
+              }}
+            />
+          )}
         </>
       )}
     </div>

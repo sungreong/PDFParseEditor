@@ -9,6 +9,9 @@ interface DraggablePopupProps {
   children: React.ReactNode;
   width?: string;
   height?: string;
+  className?: string;
+  style?: React.CSSProperties;
+  zIndex?: number;
 }
 
 const DraggablePopup: React.FC<DraggablePopupProps> = ({
@@ -16,8 +19,11 @@ const DraggablePopup: React.FC<DraggablePopupProps> = ({
   onClose,
   title,
   children,
-  width = '90vw',
-  height = '90vh'
+  width = '600px',
+  height = '400px',
+  className = '',
+  style = {},
+  zIndex = 1000
 }) => {
   const [position, setPosition] = useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
@@ -30,17 +36,23 @@ const DraggablePopup: React.FC<DraggablePopupProps> = ({
   
   const popupRef = useRef<HTMLDivElement>(null);
 
+  // width, height prop이 변경되면 size 상태 업데이트
+  useEffect(() => {
+    setSize({ width, height });
+  }, [width, height]);
+
+  // 팝업 초기 위치 설정
   useEffect(() => {
     if (isOpen && popupRef.current) {
       const rect = popupRef.current.getBoundingClientRect();
-      setPosition({
-        x: (window.innerWidth - rect.width) / 2,
-        y: (window.innerHeight - rect.height) / 2
-      });
+      const x = Math.max(0, Math.min((window.innerWidth - rect.width) / 2, window.innerWidth - rect.width));
+      const y = Math.max(0, Math.min((window.innerHeight - rect.height) / 2, window.innerHeight - rect.height));
+      setPosition({ x, y });
     }
-  }, [isOpen]);
+  }, [isOpen, size.width, size.height]);
 
   const handleMouseDown = (e: React.MouseEvent) => {
+    e.preventDefault();
     setIsDragging(true);
     setDragStart({
       x: e.clientX - position.x,
@@ -49,6 +61,7 @@ const DraggablePopup: React.FC<DraggablePopupProps> = ({
   };
 
   const handleResizeStart = (e: React.MouseEvent, type: 'right' | 'bottom' | 'corner') => {
+    e.preventDefault();
     e.stopPropagation();
     setIsResizing(true);
     setResizeType(type);
@@ -62,9 +75,16 @@ const DraggablePopup: React.FC<DraggablePopupProps> = ({
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
       if (isDragging) {
+        const newX = e.clientX - dragStart.x;
+        const newY = e.clientY - dragStart.y;
+        
+        // 화면 경계 체크
+        const maxX = window.innerWidth - (popupRef.current?.offsetWidth || 0);
+        const maxY = window.innerHeight - (popupRef.current?.offsetHeight || 0);
+        
         setPosition({
-          x: e.clientX - dragStart.x,
-          y: e.clientY - dragStart.y
+          x: Math.max(0, Math.min(newX, maxX)),
+          y: Math.max(0, Math.min(newY, maxY))
         });
       }
       
@@ -76,10 +96,10 @@ const DraggablePopup: React.FC<DraggablePopupProps> = ({
         let newHeight = initialSize.height;
         
         if (resizeType === 'right' || resizeType === 'corner') {
-          newWidth = Math.max(initialSize.width + deltaX, 400);
+          newWidth = Math.max(Math.min(initialSize.width + deltaX, window.innerWidth - position.x), 400);
         }
         if (resizeType === 'bottom' || resizeType === 'corner') {
-          newHeight = Math.max(initialSize.height + deltaY, 300);
+          newHeight = Math.max(Math.min(initialSize.height + deltaY, window.innerHeight - position.y), 300);
         }
         
         setSize({
@@ -104,41 +124,51 @@ const DraggablePopup: React.FC<DraggablePopupProps> = ({
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
     };
-  }, [isDragging, dragStart, isResizing, resizeType, resizeStart, initialSize]);
+  }, [isDragging, dragStart, isResizing, resizeType, resizeStart, initialSize, position.x, position.y]);
 
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50" style={{ background: 'transparent', pointerEvents: 'none' }}>
+    <div 
+      className="fixed inset-0"
+      style={{
+        // backgroundColor: 'rgba(0, 0, 0, 0.5)',
+        zIndex,
+        pointerEvents: isOpen ? 'auto' : 'none',
+        opacity: isOpen ? 1 : 0,
+      }}
+    >
       <div
         ref={popupRef}
-        className="fixed bg-white rounded-lg shadow-xl overflow-hidden max-w-[95vw] max-h-[95vh]"
+        className="absolute bg-white rounded-lg shadow-2xl overflow-hidden"
         style={{
+          ...style,
           left: position.x,
           top: position.y,
           width: size.width,
           height: size.height,
           minWidth: '280px',
           minHeight: '300px',
-          pointerEvents: 'auto'
         }}
       >
         {/* 헤더 */}
         <div
-          className="bg-gray-100 px-2 sm:px-4 py-2 sm:py-3 cursor-move flex justify-between items-center"
+          className="bg-gray-100 px-4 py-3 cursor-move flex justify-between items-center border-b select-none"
           onMouseDown={handleMouseDown}
         >
-          <h2 className="text-sm sm:text-base lg:text-lg font-semibold text-gray-800 truncate">{title}</h2>
+          <h2 className="text-lg font-semibold text-gray-800 truncate">{title}</h2>
           <button
             onClick={onClose}
             className="text-gray-500 hover:text-gray-700 transition-colors p-1"
           >
-            ✕
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+            </svg>
           </button>
         </div>
 
         {/* 컨텐츠 */}
-        <div className="h-[calc(100%-40px)] sm:h-[calc(100%-48px)] overflow-auto">
+        <div className="h-[calc(100%-48px)] overflow-auto">
           {children}
         </div>
 

@@ -1,8 +1,11 @@
 'use client';
 
-import React, { useState, useMemo, useEffect, useCallback } from 'react';
-import type { Layer, Box, GroupBox, Connection } from '@/types';
-import DraggablePopup from '@/components/DraggablePopup';
+import React, { useState, useMemo, useEffect, useCallback, useRef } from 'react';
+import type { Layer, GroupBox, Connection } from '@/types';
+import type { Box } from '@/hooks/useLayerManager';
+import DraggablePopup from '@/components/common/DraggablePopup';
+import { createPortal } from 'react-dom';
+import BoxDetailEditor from '@/components/BoxDetailEditor';
 
 interface LayerBoxManagerProps {
   isOpen: boolean;
@@ -146,6 +149,19 @@ export const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
 
   // 연결선 관련 상태 추가
   const [startBox, setStartBox] = useState<Box | null>(null);
+
+  // 드래그 관련 상태 추가
+  const [isDragging, setIsDragging] = useState(false);
+  const [dragPosition, setDragPosition] = useState({ x: 0, y: 0 });
+  const dragRef = useRef<HTMLDivElement>(null);
+
+  // 상태 추가
+  const [isBoxEditorOpen, setIsBoxEditorOpen] = useState(false);
+  const [editingBox, setEditingBox] = useState<Box | null>(null);
+
+  // 팝업 위치 상태 추가
+  const [layerManagerPosition, setLayerManagerPosition] = useState({ x: 100, y: 100 });
+  const [boxEditorPosition, setBoxEditorPosition] = useState({ x: 500, y: 100 });
 
   // 모든 페이지의 박스 정보 가져오기
   const allBoxes = useMemo(() => {
@@ -437,108 +453,91 @@ export const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
   };
 
   // 박스 수정 핸들러 수정
-  const handleEditBox = (e: React.MouseEvent, box: Box) => {
+  const handleEditBox = useCallback((e: React.MouseEvent, box: Box) => {
     e.preventDefault();
     e.stopPropagation();
-    
-    // 원본 박스 상태 저장
-    setOriginalBox({ ...box });
-    
-    // 박스 선택
-    onBoxSelect(box);
-    
-    // 상세 정보 창 열기
-    setIsBoxDetailOpen(true);
-    
-    // 페이지 이동 (pageNumber 속성이 있는 경우)
-    if ('pageNumber' in box && typeof box.pageNumber === 'number') {
-      setPageNumber(box.pageNumber);
+    console.log('박스 수정 클릭:', box);
+    setEditingBox(box);
+    setIsBoxEditorOpen(true);
+    setOriginalBox(box);
+    setPageNumber(box.pageNumber);
+  }, [setOriginalBox, setPageNumber]);
+
+  // 박스 수정 저장 핸들러 추가
+  const handleBoxEditSave = useCallback((boxId: string, updates: Partial<Box>) => {
+    onBoxUpdate(boxId, updates);
+    setIsBoxEditorOpen(false);
+    setEditingBox(null);
+  }, [onBoxUpdate]);
+
+  // 박스 삭제 핸들러
+  const handleBoxDelete = async (e: React.MouseEvent, box: Box) => {
+    e.stopPropagation();
+    if (window.confirm('이 박스를 삭제하시겠습니까?')) {
+      onBoxDelete(box.id);
     }
   };
 
   // 박스 렌더링 수정
   const renderBox = (box: Box) => {
-    // 박스의 그룹 정보 가져오기
-    const pageData = getPageData(documentName, ('pageNumber' in box ? box.pageNumber : 1));
-    const groupInfo = pageData?.groupBoxes?.find(group => 
-      getGroupBoxes(documentName, ('pageNumber' in box ? box.pageNumber : 1), group.id)
-        .some(groupBox => groupBox.id === box.id)
-    );
-
+    const isSelected = selectedBoxIds.has(box.id);
+    
     return (
       <div
         key={box.id}
-        className={`text-xs p-2 bg-white border rounded relative ${
-          startBox?.id === box.id ? 'ring-2 ring-blue-500' : ''} 
-        ${isDrawingArrow ? 'cursor-pointer' : ''}
-        ${selectedBoxIds.has(box.id) ? 'bg-blue-50' : ''}`}
-        style={{
-          transform: `scale(${scale})`,
-          transformOrigin: 'top left'
-        }}
-        onClick={(e) => handleBoxClick(e, box)}
+        className={`flex items-center p-2 hover:bg-gray-50 ${
+          isSelected ? 'bg-blue-50' : ''
+        }`}
       >
-        <div className="flex justify-between items-center mb-1">
-          <span className="text-gray-500">
-            위치: ({Math.round(box.x / scale)}, {Math.round(box.y / scale)}) | 
-            크기: {Math.round(box.width / scale)}×{Math.round(box.height / scale)} |
-            텍스트: {box.text ? `${box.text.length}자` : '0자'}
-          </span>
-          <div>
-            {!isDrawingArrow && (
-              <>
-                <button
-                  onClick={(e) => handleEditBox(e, box)}
-                  className="text-blue-500 hover:text-blue-700 text-xs"
-                >
-                  수정
-                </button>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onBoxDelete(box.id);
-                  }}
-                  className="text-red-500 hover:text-red-700 text-xs ml-1"
-                >
-                  삭제
-                </button>
-              </>
-            )}
-          </div>
-        </div>
-        {groupInfo && (
-          <div className="flex items-center gap-1 mb-1">
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center">
             <div
-              className="w-2 h-2 rounded-full"
-              style={{ backgroundColor: groupInfo.color }}
+              className="w-3 h-3 rounded-full mr-2"
+              style={{ backgroundColor: box.color || '#000000' }}
             />
-            <span className="text-xs text-gray-600">그룹: {groupInfo.name}</span>
+            <span className="truncate">{box.text || '(텍스트 없음)'}</span>
           </div>
-        )}
-        <div className="text-gray-700 break-words">
-          {box.text || '(텍스트 없음)'}
+          <div className="text-xs text-gray-500 mt-1">
+            페이지 {box.pageNumber} | 위치: ({Math.round(box.x)}, {Math.round(box.y)})
+          </div>
         </div>
-        {isDrawingArrow && startBox?.id === box.id && (
-          <div className="absolute inset-0 bg-blue-100 bg-opacity-20 pointer-events-none" />
-        )}
+        <div className="flex items-center space-x-2">
+          <button
+            onClick={(e) => handleEditBox(e, box)}
+            className="p-1 hover:bg-gray-200 rounded"
+            title="수정"
+          >
+            <svg className="w-4 h-4 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+            </svg>
+          </button>
+          <button
+            onClick={(e) => handleBoxDelete(e, box)}
+            className="p-1 hover:bg-red-100 rounded"
+            title="삭제"
+          >
+            <svg className="w-4 h-4 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+            </svg>
+          </button>
+        </div>
       </div>
     );
   };
 
   // 박스 테이블 렌더링 수정
   const renderBoxTable = () => {
-    // filteredBoxes와 selectedBoxes가 없을 경우 빈 배열 사용
     const boxes = filteredBoxes || [];
     const selected = selectedBoxes || [];
 
     return (
-      <div className="flex flex-col h-full relative">
-        <div className="flex items-center gap-2 p-1 border-b bg-gray-50">
-          <div className="flex items-center gap-1">
+      <div className="flex flex-col h-full bg-white rounded-lg shadow-sm">
+        <div className="flex items-center gap-2 p-3 border-b bg-gray-50">
+          <div className="flex items-center gap-2">
             <select
               value={textLengthFilter.type}
               onChange={(e) => setTextLengthFilter(prev => ({ ...prev, type: e.target.value as 'more' | 'less' | 'none' }))}
-              className="px-1 py-0.5 border rounded text-xs"
+              className="px-2 py-1 border rounded-md text-xs focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
             >
               <option value="none">텍스트 길이</option>
               <option value="more">이상</option>
@@ -549,7 +548,7 @@ export const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
                 type="number"
                 value={textLengthFilter.value}
                 onChange={(e) => setTextLengthFilter(prev => ({ ...prev, value: parseInt(e.target.value) || 0 }))}
-                className="w-16 px-1 py-0.5 border rounded text-xs"
+                className="w-20 px-2 py-1 border rounded-md text-xs focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                 min="0"
               />
             )}
@@ -557,10 +556,10 @@ export const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
           <div className="flex items-center gap-2">
             <button
               onClick={() => onMultiSelectModeChange(!isMultiSelectMode)}
-              className={`px-2 py-0.5 rounded text-xs ${
+              className={`px-3 py-1 rounded-md text-xs transition-colors ${
                 isMultiSelectMode 
-                  ? 'bg-blue-100 text-blue-700' 
-                  : 'bg-gray-100 text-gray-700'
+                  ? 'bg-blue-100 text-blue-700 hover:bg-blue-200' 
+                  : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
               }`}
             >
               {isMultiSelectMode ? '다중 선택 끄기' : '다중 선택 켜기'}
@@ -568,7 +567,7 @@ export const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
             {selected.length >= 2 && (
               <button
                 onClick={handleCreateGroup}
-                className="px-2 py-0.5 bg-green-100 text-green-700 rounded text-xs hover:bg-green-200"
+                className="px-3 py-1 bg-green-100 text-green-700 rounded-md text-xs hover:bg-green-200 transition-colors"
               >
                 그룹 생성 ({selected.length}개)
               </button>
@@ -576,10 +575,10 @@ export const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
           </div>
         </div>
         <div className="flex-1 overflow-auto">
-          <table className="w-full text-xs">
-            <thead className="bg-gray-50 sticky top-0">
+          <table className="min-w-full divide-y divide-gray-200">
+            <thead className="bg-gray-50">
               <tr>
-                <th className="px-1 py-0.5 text-left w-8">
+                <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-8">
                   <input
                     type="checkbox"
                     checked={selected.length > 0 && selected.length === boxes.length}
@@ -590,29 +589,29 @@ export const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
                         onBoxesSelect([]);
                       }
                     }}
-                    className="w-3 h-3"
+                    className="w-3 h-3 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
                   />
                 </th>
-                <th className="px-1 py-0.5 text-left">P</th>
-                <th className="px-1 py-0.5 text-left">위치</th>
-                <th className="px-1 py-0.5 text-left">크기</th>
-                <th className="px-1 py-0.5 text-left">그룹</th>
-                <th className="px-1 py-0.5 text-left">텍스트 길이</th>
-                <th className="px-1 py-0.5 text-right">작업</th>
+                <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">P</th>
+                <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">위치</th>
+                <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">크기</th>
+                <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">그룹</th>
+                <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">텍스트 길이</th>
+                <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">작업</th>
               </tr>
             </thead>
-            <tbody>
+            <tbody className="bg-white divide-y divide-gray-200">
               {boxes.map((box) => {
                 const isSelected = selected.some(b => b.id === box.id);
                 return (
                   <tr 
                     key={box.id} 
-                    className={`border-b hover:bg-gray-50 ${
+                    className={`hover:bg-gray-50 transition-colors ${
                       isSelected ? 'bg-blue-50' : ''
                     }`}
                     onClick={() => handleSelectBox(box.id)}
                   >
-                    <td className="px-1 py-0.5">
+                    <td className="px-3 py-2 whitespace-nowrap">
                       <input
                         type="checkbox"
                         checked={isSelected}
@@ -620,45 +619,42 @@ export const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
                           e.stopPropagation();
                           handleSelectBox(box.id);
                         }}
-                        className="w-3 h-3"
+                        className="w-3 h-3 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
                       />
                     </td>
-                    <td className="px-1 py-0.5">{box.pageNumber}</td>
-                    <td className="px-1 py-0.5 whitespace-nowrap">
+                    <td className="px-3 py-2 whitespace-nowrap text-sm text-gray-900">{box.pageNumber}</td>
+                    <td className="px-3 py-2 whitespace-nowrap text-sm text-gray-500">
                       {Math.round(box.x)},{Math.round(box.y)}
                     </td>
-                    <td className="px-1 py-0.5 whitespace-nowrap">
+                    <td className="px-3 py-2 whitespace-nowrap text-sm text-gray-500">
                       {Math.round(box.width)}×{Math.round(box.height)}
                     </td>
-                    <td className="px-1 py-0.5">
+                    <td className="px-3 py-2 whitespace-nowrap">
                       {isSelected && (
                         <div className="flex items-center gap-1">
                           <div
                             className="w-2 h-2 rounded-full"
                             style={{ backgroundColor: box.color }}
                           />
-                          <span>{box.text || '(텍스트 없음)'}</span>
+                          <span className="text-sm text-gray-900">{box.text || '(텍스트 없음)'}</span>
                         </div>
                       )}
                     </td>
-                    <td className="px-1 py-0.5 text-gray-500">
+                    <td className="px-3 py-2 whitespace-nowrap text-sm text-gray-500">
                       {box.text ? `${box.text.length}자` : '0자'}
                     </td>
-                    <td className="px-1 py-0.5 text-right whitespace-nowrap">
+                    <td className="px-3 py-2 whitespace-nowrap text-right text-sm font-medium">
                       {!isDrawingArrow && (
                         <>
                           <button
                             onClick={(e) => handleEditBox(e, box)}
-                            className="text-blue-500 hover:text-blue-700 text-xs"
+                            className="text-blue-600 hover:text-blue-900 text-xs mr-2"
                           >
                             수정
                           </button>
                           <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onBoxDelete(box.id);
-                            }}
-                            className="text-red-500 hover:text-red-700 text-xs ml-1"
+                            onClick={(e) => handleBoxDelete(e, box)}
+                            className="text-red-600 hover:text-red-900 text-xs"
                           >
                             삭제
                           </button>
@@ -719,6 +715,12 @@ export const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
     const groupName = prompt('그룹 이름을 입력하세요:');
     if (!groupName) return;
 
+    // layer가 없으면 그룹 생성 불가
+    if (!layer) {
+      alert('레이어가 선택되지 않았습니다.');
+      return;
+    }
+
     // 현재 페이지 번호 가져오기
     const currentPage = selected[0].pageNumber;
 
@@ -745,7 +747,7 @@ export const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
     const newGroup: GroupBox = {
       id: groupId,
       name: groupName,
-      layerId: layer?.id,
+      layerId: layer.id,
       pageNumber: currentPage,
       color: `#${Math.floor(Math.random()*16777215).toString(16)}`, // 랜덤 색상
       boxIds: selectedBoxesInfo.map(box => box.id),
@@ -778,48 +780,50 @@ export const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
     const groups = pageData.groupBoxes || [];
 
     return (
-      <div className="flex flex-col h-full relative">
-        <div className="flex items-center gap-2 p-1 border-b bg-gray-50">
-          <span className="text-sm font-medium">그룹 목록</span>
-          <span className="text-xs text-gray-500">({groups.length}개)</span>
+      <div className="flex flex-col h-full bg-white rounded-lg shadow-sm">
+        <div className="flex items-center gap-2 p-3 border-b bg-gray-50">
+          <span className="text-sm font-medium text-gray-800">그룹 목록</span>
+          <span className="text-xs text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full">({groups.length}개)</span>
         </div>
         <div className="flex-1 overflow-auto">
-          <table className="w-full text-xs">
-            <thead className="bg-gray-50 sticky top-0">
+          <table className="min-w-full divide-y divide-gray-200">
+            <thead className="bg-gray-50">
               <tr>
-                <th className="px-1 py-0.5 text-left">이름</th>
-                <th className="px-1 py-0.5 text-left">박스 수</th>
-                <th className="px-1 py-0.5 text-left">범위</th>
-                <th className="px-1 py-0.5 text-left">생성일</th>
-                <th className="px-1 py-0.5 text-right">작업</th>
+                <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">이름</th>
+                <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">박스 수</th>
+                <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">범위</th>
+                <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">생성일</th>
+                <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">작업</th>
               </tr>
             </thead>
-            <tbody>
+            <tbody className="bg-white divide-y divide-gray-200">
               {groups.map((group) => {
                 const groupBoxes = getGroupBoxes(documentName, currentPage, group.id);
                 return (
-                  <tr key={group.id} className="border-b hover:bg-gray-50">
-                    <td className="px-1 py-0.5">
-                      <div className="flex items-center gap-1">
+                  <tr key={group.id} className="hover:bg-gray-50 transition-colors">
+                    <td className="px-3 py-2 whitespace-nowrap">
+                      <div className="flex items-center gap-2">
                         <div
-                          className="w-2 h-2 rounded-full"
+                          className="w-3 h-3 rounded-full shadow-sm"
                           style={{ backgroundColor: group.color }}
                         />
-                        {group.name}
+                        <span className="text-sm text-gray-900">{group.name}</span>
                       </div>
                     </td>
-                    <td className="px-1 py-0.5">{groupBoxes.length}개</td>
-                    <td className="px-1 py-0.5">
+                    <td className="px-3 py-2 whitespace-nowrap text-sm text-gray-500">
+                      {groupBoxes.length}개
+                    </td>
+                    <td className="px-3 py-2 whitespace-nowrap text-sm text-gray-500">
                       {group.bounds ? (
                         <span>
                           {Math.round(group.bounds.width)}×{Math.round(group.bounds.height)}
                         </span>
                       ) : ''}
                     </td>
-                    <td className="px-1 py-0.5">
+                    <td className="px-3 py-2 whitespace-nowrap text-sm text-gray-500">
                       {new Date(group.createdAt).toLocaleString()}
                     </td>
-                    <td className="px-1 py-0.5 text-right whitespace-nowrap">
+                    <td className="px-3 py-2 whitespace-nowrap text-right text-sm font-medium">
                       <button
                         onClick={() => {
                           const newName = prompt('새 그룹 이름을 입력하세요:', group.name);
@@ -830,7 +834,7 @@ export const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
                             });
                           }
                         }}
-                        className="text-blue-500 hover:text-blue-700 text-xs"
+                        className="text-blue-600 hover:text-blue-900 text-xs mr-2"
                       >
                         수정
                       </button>
@@ -840,7 +844,7 @@ export const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
                             removeGroupBox(documentName, currentPage, group.id);
                           }
                         }}
-                        className="text-red-500 hover:text-red-700 text-xs ml-1"
+                        className="text-red-600 hover:text-red-900 text-xs"
                       >
                         삭제
                       </button>
@@ -876,213 +880,40 @@ export const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
     });
   }, [edges, selectedPage, layer?.id, searchTerm]);
 
-  // 엣지 테이블 렌더링
-  const renderEdgeTable = () => (
-    <div className="flex flex-col h-full relative">
-      <div className="flex items-center gap-2 p-1 border-b bg-gray-50">
-        <span className="text-sm font-medium">연결선 목록</span>
-        <span className="text-xs text-gray-500">({filteredEdges.length}개)</span>
-        <input
-          type="text"
-          value={searchTerm}
-          onChange={(e) => setSearchTerm(e.target.value)}
-          placeholder="연결선 검색..."
-          className="px-2 py-0.5 border rounded text-xs flex-1 min-w-[100px]"
-        />
-      </div>
-      <div className="flex-1 overflow-auto">
-        <table className="min-w-full text-xs">
-          <thead className="bg-gray-50">
-            <tr>
-              <th className="px-1 py-1 text-left">페이지</th>
-              <th className="px-1 py-1 text-left">시작 박스</th>
-              <th className="px-1 py-1 text-left">끝 박스</th>
-              <th className="px-1 py-1 text-right">작업</th>
-            </tr>
-          </thead>
-          <tbody>
-            {filteredEdges.map(edge => (
-              <tr key={edge.id} className="border-b hover:bg-gray-50">
-                <td className="px-1 py-0.5">{edge.startBox.pageNumber}</td>
-                <td className="px-1 py-0.5">{edge.startBox.text || '(삭제됨)'}</td>
-                <td className="px-1 py-0.5">{edge.endBox.text || '(삭제됨)'}</td>
-                <td className="px-1 py-0.5 text-right">
-                  <button
-                    onClick={() => onEdgeDelete(edge.id)}
-                    className="text-red-500 hover:text-red-700 text-xs"
-                  >
-                    삭제
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-
-  // 툴바 렌더링 수정
-  const renderToolbar = () => (
-    <div className="flex flex-wrap items-center gap-1 sm:gap-2 p-2 border-b shrink-0">
-      <div className="flex items-center gap-2 mr-4">
-        <span className="text-sm font-medium">{documentName}</span>
-        <span className="text-xs text-gray-500">({numPages}페이지)</span>
-      </div>
-      <div className="flex items-center gap-2 mr-4">
-        <button
-          onClick={() => setPageNumber(Math.max(1, pageNumber - 1))}
-          disabled={pageNumber <= 1}
-          className="px-2 py-1 bg-gray-100 rounded text-xs disabled:opacity-50"
-        >
-          ◀
-        </button>
-        <input
-          type="number"
-          min={1}
-          max={numPages}
-          value={pageNumber}
-          onChange={(e) => {
-            const value = parseInt(e.target.value);
-            if (value >= 1 && value <= numPages) {
-              setPageNumber(value);
-            }
-          }}
-          className="w-16 px-2 py-1 border rounded text-center text-xs"
-        />
-        <span className="text-xs text-gray-500">/ {numPages}</span>
-        <button
-          onClick={() => setPageNumber(Math.min(numPages, pageNumber + 1))}
-          disabled={pageNumber >= numPages}
-          className="px-2 py-1 bg-gray-100 rounded text-xs disabled:opacity-50"
-        >
-          ▶
-        </button>
-      </div>
-      <select
-        value={selectedPage?.toString() || ''}
-        onChange={(e) => setSelectedPage(e.target.value ? Number(e.target.value) : null)}
-        className="px-1 sm:px-2 py-0.5 border rounded text-xs"
-      >
-        <option value="">전체</option>
-        {Array.from({ length: numPages }, (_, i) => i + 1).map(page => (
-          <option key={page} value={page}>{page}p</option>
-        ))}
-      </select>
-      <select
-        value={sortBy}
-        onChange={(e) => setSortBy(e.target.value as 'index' | 'position')}
-        className="px-1 sm:px-2 py-0.5 border rounded text-xs"
-      >
-        <option value="index">기본</option>
-        <option value="position">위치</option>
-      </select>
-      <input
-        type="text"
-        value={searchTerm}
-        onChange={(e) => setSearchTerm(e.target.value)}
-        placeholder="텍스트 검색..."
-        className="px-2 py-0.5 border rounded text-xs flex-1 min-w-[100px]"
-      />
-      <button
-        onClick={() => setShowDetails(!showDetails)}
-        className={`px-2 py-0.5 rounded text-xs ${
-          showDetails 
-            ? 'bg-blue-100 text-blue-700' 
-            : 'bg-gray-100 text-gray-700'
-        }`}
-      >
-        {showDetails ? '목록보기' : '상세보기'}
-      </button>
-      <button
-        onClick={() => setShowGroupTable(!showGroupTable)}
-        className={`px-2 py-0.5 rounded text-xs ${
-          showGroupTable 
-            ? 'bg-blue-100 text-blue-700' 
-            : 'bg-gray-100 text-gray-700'
-        }`}
-      >
-        {showGroupTable ? '박스 목록' : '그룹 목록'}
-      </button>
-      <button
-        onClick={() => setShowEdgeTable(!showEdgeTable)}
-        className={`px-2 py-0.5 rounded text-xs ${
-          showEdgeTable 
-            ? 'bg-blue-100 text-blue-700' 
-            : 'bg-gray-100 text-gray-700'
-        }`}
-      >
-        {showEdgeTable ? '박스 목록' : '연결선 목록'}
-      </button>
-    </div>
-  );
-
-  // 선택 영역 그리기 관련 상태 추가
-  const [selectionStart, setSelectionStart] = useState<{ x: number; y: number } | null>(null);
-  const [selectionEnd, setSelectionEnd] = useState<{ x: number; y: number } | null>(null);
-  const [isDrawingSelection, setIsDrawingSelection] = useState(false);
-
-  // 선택 영역 그리기 핸들러 추가
-  const handleSelectionMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (!isMultiSelectMode) return;
-
-    const rect = e.currentTarget.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
-    
-    setSelectionStart({ x, y });
-    setSelectionEnd({ x, y });
-    setIsDrawingSelection(true);
+  // 드래그 핸들러
+  const handleDragStart = (e: React.MouseEvent) => {
+    if (dragRef.current) {
+      setIsDragging(true);
+      const rect = dragRef.current.getBoundingClientRect();
+      setDragPosition({
+        x: e.clientX - rect.left,
+        y: e.clientY - rect.top
+      });
+    }
   };
 
-  const handleSelectionMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (!isDrawingSelection || !selectionStart) return;
+  const handleDragMove = useCallback((e: MouseEvent) => {
+    if (isDragging && dragRef.current) {
+      const newX = e.clientX - dragPosition.x;
+      const newY = e.clientY - dragPosition.y;
+      dragRef.current.style.transform = `translate(${newX}px, ${newY}px)`;
+    }
+  }, [isDragging, dragPosition]);
 
-    const rect = e.currentTarget.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
-    
-    setSelectionEnd({ x, y });
+  const handleDragEnd = () => {
+    setIsDragging(false);
   };
 
-  const handleSelectionMouseUp = () => {
-    if (!isDrawingSelection || !selectionStart || !selectionEnd) return;
-
-    // 선택 영역 계산
-    const selectionArea = {
-      x: Math.min(selectionStart.x, selectionEnd.x),
-      y: Math.min(selectionStart.y, selectionEnd.y),
-      width: Math.abs(selectionEnd.x - selectionStart.x),
-      height: Math.abs(selectionEnd.y - selectionStart.y)
+  useEffect(() => {
+    if (isDragging) {
+      window.addEventListener('mousemove', handleDragMove);
+      window.addEventListener('mouseup', handleDragEnd);
+    }
+    return () => {
+      window.removeEventListener('mousemove', handleDragMove);
+      window.removeEventListener('mouseup', handleDragEnd);
     };
-
-    // 선택 영역 내의 박스들 선택
-    handleSelectBoxesInArea(selectionArea);
-
-    // 선택 영역 초기화
-    setSelectionStart(null);
-    setSelectionEnd(null);
-    setIsDrawingSelection(false);
-  };
-
-  // 선택 영역 렌더링 컴포넌트
-  const SelectionArea = () => {
-    if (!selectionStart || !selectionEnd) return null;
-
-    const style = {
-      position: 'absolute' as const,
-      left: Math.min(selectionStart.x, selectionEnd.x),
-      top: Math.min(selectionStart.y, selectionEnd.y),
-      width: Math.abs(selectionEnd.x - selectionStart.x),
-      height: Math.abs(selectionEnd.y - selectionStart.y),
-      border: '2px solid #3B82F6',
-      backgroundColor: 'rgba(59, 130, 246, 0.1)',
-      pointerEvents: 'none' as const,
-      zIndex: 1000
-    };
-
-    return <div style={style} />;
-  };
+  }, [isDragging, handleDragMove]);
 
   // 레이어 추가 시 색상 할당
   const handleLayerAdd = () => {
@@ -1102,68 +933,328 @@ export const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
     }
   };
 
-  return (
-    <DraggablePopup
-      isOpen={isOpen}
-      onClose={onClose}
-      title="박스 & 레이어 관리"
-      width="30vw"
-      height="90vh"
-    >
-      <div className="flex h-full flex-col lg:flex-row">
-        {/* 레이어 목록 */}
-        <div className="w-64 border-r p-4">
-          <div className="flex justify-between items-center mb-4">
-            <h3 className="font-medium">레이어</h3>
-            <button
-              onClick={handleLayerAdd}
-              className="px-2 py-1 bg-blue-500 text-white rounded text-sm hover:bg-blue-600"
-            >
-              + 새 레이어
-            </button>
-          </div>
-          {/* 레이어 목록 렌더링 */}
-          <div className="space-y-2">
-            {layers.map(layer => (
-              <div
-                key={layer.id}
-                className={`flex items-center justify-between p-2 rounded ${
-                  activeLayer?.id === layer.id ? 'bg-blue-50' : 'hover:bg-gray-50'
-                }`}
-              >
-                <div className="flex items-center gap-2">
-                  <div
-                    className="w-4 h-4 rounded-full"
-                    style={{ backgroundColor: layer.color }}
-                  />
-                  <span className="text-sm">{layer.name}</span>
-                </div>
-                <button
-                  onClick={() => onLayerColorChange(layer.id, layerColors[Math.floor(Math.random() * layerColors.length)])}
-                  className="text-xs text-gray-500 hover:text-gray-700"
-                >
-                  색상 변경
-                </button>
-              </div>
-            ))}
+  // 레이어 복제 함수 수정
+  const handleDuplicateLayer = async (layerId: string) => {
+    try {
+      // 1. 원본 레이어 정보 가져오기
+      const sourceLayer = layers.find(l => l.id === layerId);
+      if (!sourceLayer) {
+        console.error('원본 레이어를 찾을 수 없습니다.');
+        return;
+      }
+
+      // 2. 원본 레이어의 모든 박스 정보 가져오기
+      const sourceBoxes = allBoxes.filter(box => box.layerId === layerId);
+
+      // 3. 새로운 레이어 생성
+      onDuplicateLayer(layerId);
+
+      // 4. 새로 생성된 레이어 찾기 (마지막에 추가된 레이어)
+      const newLayer = layers[layers.length - 1];
+      if (!newLayer) {
+        console.error('새 레이어 생성에 실패했습니다.');
+        return;
+      }
+
+      // 5. 새 레이어에 원본 박스들 복사
+      const copyPromises = sourceBoxes.map(async (sourceBox) => {
+        // 새로운 박스 ID 생성
+        const newBoxId = `box_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        
+        // 박스 정보 복사하면서 새로운 ID와 레이어 ID 설정
+        const newBox = {
+          ...sourceBox,
+          id: newBoxId,
+          layerId: newLayer.id,
+          // 기존 속성들 유지
+          text: sourceBox.text,
+          x: sourceBox.x,
+          y: sourceBox.y,
+          width: sourceBox.width,
+          height: sourceBox.height,
+          color: sourceBox.color,
+          pageNumber: sourceBox.pageNumber
+        };
+
+        // 새 박스 추가
+        await addBox(newBox);
+      });
+
+      // 6. 모든 박스 복사 완료 대기
+      await Promise.all(copyPromises);
+
+      // 7. 새 레이어 선택
+      onLayerSelect(newLayer.id);
+
+      console.log(`레이어 복제 완료: ${sourceLayer.name} -> ${newLayer.name}`);
+      console.log(`복사된 박스 수: ${sourceBoxes.length}`);
+
+    } catch (error) {
+      console.error('레이어 복제 중 오류 발생:', error);
+    }
+  };
+
+  // 툴바 렌더링 수정
+  const renderToolbar = () => (
+    <div className="flex flex-wrap items-center gap-4 p-4 border-b border-gray-200 bg-white sticky top-0 z-10 shadow-sm">
+      {/* 문서 정보 */}
+      <div className="flex items-center gap-2 px-2 py-1 bg-gray-50 rounded-lg">
+        <span className="text-sm font-medium text-gray-800">{documentName}</span>
+        <span className="text-xs text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full">({numPages}페이지)</span>
+      </div>
+
+      {/* 정렬 및 필터 */}
+      <div className="flex items-center gap-3">
+        <div className="relative">
+          <select
+            value={sortBy}
+            onChange={(e) => setSortBy(e.target.value as 'index' | 'position')}
+            className="appearance-none w-24 px-3 py-1.5 pr-8 bg-gray-50 border border-gray-200 rounded-md text-xs focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+          >
+            <option value="index">기본 정렬</option>
+            <option value="position">위치순</option>
+          </select>
+          <div className="absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none">
+            <svg className="w-3 h-3 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" />
+            </svg>
           </div>
         </div>
-        {/* 기존 컨텐츠 */}
-        <div className="flex-1 min-w-0">
-          <div className="flex flex-col h-full w-full bg-white">
-            {renderToolbar()}
-            <div className="flex-1 overflow-auto p-2 sm:p-4">
+
+        {/* 검색 */}
+        <div className="relative flex-1 min-w-[200px]">
+          <input
+            type="text"
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            placeholder="텍스트 검색..."
+            className="w-full px-3 py-1.5 pl-9 border border-gray-200 rounded-md text-xs focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+          />
+          <div className="absolute left-3 top-1/2 -translate-y-1/2">
+            <svg className="w-3.5 h-3.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+            </svg>
+          </div>
+        </div>
+      </div>
+
+      {/* 보기 모드 버튼 그룹 */}
+      <div className="flex items-center gap-2 ml-auto">
+        <div className="bg-gray-100 p-0.5 rounded-lg flex items-center gap-0.5">
+          <button
+            onClick={() => setShowDetails(!showDetails)}
+            className={`px-3 py-1.5 rounded-md text-xs transition-colors ${
+              showDetails 
+                ? 'bg-white text-blue-600 shadow-sm' 
+                : 'text-gray-600 hover:bg-gray-50'
+            }`}
+          >
+            {showDetails ? '목록보기' : '상세보기'}
+          </button>
+          <button
+            onClick={() => setShowGroupTable(!showGroupTable)}
+            className={`px-3 py-1.5 rounded-md text-xs transition-colors ${
+              showGroupTable 
+                ? 'bg-white text-blue-600 shadow-sm' 
+                : 'text-gray-600 hover:bg-gray-50'
+            }`}
+          >
+            {showGroupTable ? '박스 목록' : '그룹 목록'}
+          </button>
+          <button
+            onClick={() => setShowEdgeTable(!showEdgeTable)}
+            className={`px-3 py-1.5 rounded-md text-xs transition-colors ${
+              showEdgeTable 
+                ? 'bg-white text-blue-600 shadow-sm' 
+                : 'text-gray-600 hover:bg-gray-50'
+            }`}
+          >
+            {showEdgeTable ? '박스 목록' : '연결선 목록'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+
+  return (
+    <>
+      <DraggablePopup
+        isOpen={isOpen}
+        onClose={onClose}
+        title="레이어 & 박스 관리"
+        width="30vw"
+        height="70vh"
+        zIndex={100}
+        initialPosition={layerManagerPosition}
+        onPositionChange={setLayerManagerPosition}
+      >
+        <div className="flex h-full flex-col bg-white/80 backdrop-blur-sm rounded-lg">
+          {/* 현재 레이어 정보 - 상단 고정 */}
+          <div className="border-b border-gray-200/50 bg-white/95 shrink-0">
+            {activeLayer ? (
+              <div className="p-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <div
+                      className="w-5 h-5 rounded-full shadow-sm border border-gray-200"
+                      style={{ backgroundColor: activeLayer.color }}
+                    />
+                    <div>
+                      <h3 className="font-medium text-gray-800">{activeLayer.name}</h3>
+                      <div className="flex items-center gap-3 text-xs text-gray-500">
+                        <span>박스 {filteredBoxes.length}</span>
+                        <span>•</span>
+                        <span>연결선 {filteredEdges.length}</span>
+                        <span>•</span>
+                        <span>그룹 {getPageData(documentName, currentPage)?.groupBoxes?.filter(g => g.layerId === activeLayer.id).length || 0}</span>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <button
+                      onClick={() => onLayerVisibilityToggle(activeLayer.id)}
+                      className="p-1.5 text-gray-600 hover:bg-gray-100 rounded-md transition-colors"
+                      title="표시/숨김"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                      </svg>
+                    </button>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onLayerColorChange(activeLayer.id, layerColors[Math.floor(Math.random() * layerColors.length)]);
+                      }}
+                      className="p-1.5 text-gray-600 hover:bg-gray-100 rounded-md transition-colors"
+                      title="색상 변경"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M7 21a4 4 0 01-4-4V5a2 2 0 012-2h4a2 2 0 012 2v12a4 4 0 01-4 4zm0 0h12a2 2 0 002-2v-4a2 2 0 00-2-2h-2.343M11 7.343l1.657-1.657a2 2 0 012.828 0l2.829 2.829a2 2 0 010 2.828l-8.486 8.485M7 17h.01" />
+                      </svg>
+                    </button>
+                    <button
+                      onClick={() => {
+                        const newName = prompt('레이어 이름 변경:', activeLayer.name);
+                        if (newName) onLayerNameChange(activeLayer.id, newName);
+                      }}
+                      className="p-1.5 text-gray-600 hover:bg-gray-100 rounded-md transition-colors"
+                      title="이름 변경"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                      </svg>
+                    </button>
+                    <button
+                      onClick={() => handleDuplicateLayer(activeLayer.id)}
+                      className="p-1.5 text-gray-600 hover:bg-gray-100 rounded-md transition-colors"
+                      title="복제"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2z" />
+                      </svg>
+                    </button>
+                    <button
+                      onClick={() => onExportLayer(activeLayer.id)}
+                      className="p-1.5 text-gray-600 hover:bg-gray-100 rounded-md transition-colors"
+                      title="내보내기"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                      </svg>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="p-4 text-center">
+                <div className="text-gray-400 mb-2">
+                  <svg className="w-8 h-8 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
+                  </svg>
+                </div>
+                <h3 className="text-sm font-medium text-gray-800 mb-1">레이어를 선택해주세요</h3>
+                <button
+                  onClick={handleLayerAdd}
+                  className="px-3 py-1.5 bg-blue-500 text-white rounded-md text-xs hover:bg-blue-600 transition-colors shadow-sm"
+                >
+                  + 새 레이어 만들기
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* 툴바 - 고정 */}
+          {activeLayer && renderToolbar()}
+
+          {/* 메인 컨텐츠 - 스크롤 가능 */}
+          {activeLayer && (
+            <div className="flex-1 overflow-y-auto min-h-0 p-4 bg-white/95">
               {showEdgeTable ? (
-                renderEdgeTable()
+                <div className="h-full overflow-hidden flex flex-col">
+                  <div className="flex items-center gap-2 p-3 border-b bg-gray-50 shrink-0">
+                    <span className="text-sm font-medium text-gray-800">연결선 목록</span>
+                    <span className="text-xs text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full">({filteredEdges.length}개)</span>
+                  </div>
+                  <div className="flex-1 overflow-auto">
+                    <table className="min-w-full divide-y divide-gray-200">
+                      <thead className="bg-gray-50 sticky top-0">
+                        <tr>
+                          <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">페이지</th>
+                          <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">시작 박스</th>
+                          <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">끝 박스</th>
+                          <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">작업</th>
+                        </tr>
+                      </thead>
+                      <tbody className="bg-white divide-y divide-gray-200">
+                        {filteredEdges.map(edge => (
+                          <tr key={edge.id} className="hover:bg-gray-50 transition-colors">
+                            <td className="px-3 py-2 whitespace-nowrap text-sm text-gray-900">{edge.startBox.pageNumber}</td>
+                            <td className="px-3 py-2 whitespace-nowrap text-sm text-gray-500">{edge.startBox.text || '(삭제됨)'}</td>
+                            <td className="px-3 py-2 whitespace-nowrap text-sm text-gray-500">{edge.endBox.text || '(삭제됨)'}</td>
+                            <td className="px-3 py-2 whitespace-nowrap text-right text-sm font-medium">
+                              <button
+                                onClick={() => onEdgeDelete(edge.id)}
+                                className="text-red-600 hover:text-red-900 text-xs"
+                              >
+                                삭제
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
               ) : showGroupTable ? (
                 renderGroupTable()
               ) : (
                 showDetails ? renderDetailView() : renderBoxTable()
               )}
             </div>
-          </div>
+          )}
         </div>
-      </div>
-    </DraggablePopup>
+      </DraggablePopup>
+
+      {isBoxEditorOpen && editingBox && layer && (
+        <BoxDetailEditor
+          box={editingBox}
+          originalBox={editingBox}
+          onUpdate={handleBoxEditSave}
+          onCancel={() => {
+            setIsBoxEditorOpen(false);
+            setEditingBox(null);
+          }}
+          pageNumber={editingBox.pageNumber}
+          documentName={documentName}
+          viewerWidth={1200}
+          viewerHeight={800}
+          layers={[layer]}
+          isOpen={isBoxEditorOpen}
+          position={boxEditorPosition}
+          onPositionChange={setBoxEditorPosition}
+        />
+      )}
+    </>
   );
 };
