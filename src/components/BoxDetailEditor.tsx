@@ -560,8 +560,36 @@ const BoxDetailEditor: React.FC<BoxDetailEditorProps> = ({
 
   const handleDelete = () => {
     if (window.confirm('이 박스를 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다.')) {
-      onDelete?.(box.id);
-      onCancel?.();
+      try {
+        // 박스 삭제 실행
+        console.log('a박스 삭제:', box.id);
+        onDelete?.(box.id);
+        
+        // 팝업 표시
+        const popup = document.createElement('div');
+        popup.className = 'fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-red-100 border border-red-400 text-red-700 px-6 py-3 rounded shadow-lg z-[9999] flex items-center gap-2';
+        popup.innerHTML = `
+          <svg class="w-5 h-5 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+          </svg>
+          <span class="font-medium">박스가 삭제되었습니다</span>
+        `;
+        
+        document.body.appendChild(popup);
+        
+        setTimeout(() => {
+          popup.classList.add('opacity-0', 'transition-opacity', 'duration-300');
+          setTimeout(() => {
+            document.body.removeChild(popup);
+          }, 300);
+        }, 1500);
+
+        // 상세 정보 창 닫기
+        onCancel?.();
+      } catch (error) {
+        console.error('박스 삭제 중 오류 발생:', error);
+        alert('박스 삭제 중 오류가 발생했습니다.');
+      }
     }
   };
 

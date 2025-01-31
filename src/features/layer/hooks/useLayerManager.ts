@@ -156,6 +156,11 @@ export const useLayerManager = () => {
     }));
   }, []);
 
+  // 박스 ID 생성 함수 수정
+  const generateBoxId = useCallback(() => {
+    return `box_${Date.now()}_${uuidv4().split('-')[0]}`;
+  }, []);
+
   const addBox = useCallback((documentId: string, boxInput: Box) => {
     if (!state.activeLayer) {
       console.error('활성 레이어가 없습니다.');
@@ -177,9 +182,9 @@ export const useLayerManager = () => {
       initializeDocumentPage(documentId, pageNumber);
     }
 
-    // 새 박스 생성
+    // 새 박스 생성 (generateBoxId 사용)
     const newBox: Box = {
-      id: uuidv4(),
+      id: generateBoxId(),
       layerId: state.activeLayer.id,
       pageNumber: pageNumber,
       x: boxInput.x,
@@ -239,62 +244,77 @@ export const useLayerManager = () => {
     });
 
     return newBox;
-  }, [state.activeLayer, initializeDocumentPage]);
+  }, [state.activeLayer, initializeDocumentPage, generateBoxId]);
 
   const removeBox = useCallback((documentId: string, boxId: string) => {
     setState(prev => {
-      // 박스 정보 찾기
-      let targetBox: Box | undefined;
-      let targetPageNumber: number | undefined;
+      try {
+        // 1. 박스 정보 찾기
+        let targetBox: Box | undefined;
+        let targetLayerId: string | undefined;
 
-      for (const layer of prev.layers) {
-        targetBox = layer.boxes.find(box => box.id === boxId);
-        if (targetBox) {
-          targetPageNumber = targetBox.pageNumber;
-          break;
+        // 모든 레이어에서 박스 찾기
+        for (const layer of prev.layers) {
+          targetBox = layer.boxes.find(box => box.id === boxId);
+          if (targetBox) {
+            targetLayerId = layer.id;
+            break;
+          }
         }
-      }
 
-      if (!targetBox || !targetPageNumber) return prev;
-
-      // 레이어에서 박스 제거
-      const updatedLayers = prev.layers.map(layer => ({
-        ...layer,
-        boxes: layer.boxes.filter(box => box.id !== boxId),
-        boxesByPage: {
-          ...layer.boxesByPage,
-          [targetPageNumber]: (layer.boxesByPage[targetPageNumber] || []).filter(box => box.id !== boxId)
+        if (!targetBox || !targetLayerId) {
+          console.warn('삭제할 박스를 찾을 수 없습니다:', { boxId, documentId });
+          return prev;
         }
-      }));
 
-      // 문서의 페이지 데이터에서 박스 제거
-      const pageKey = targetPageNumber.toString();
-      const existingDocument = prev.layersByDocument[documentId] || {};
-      const existingPage = existingDocument[pageKey];
+        const pageNumber = targetBox.pageNumber;
+        const pageKey = pageNumber.toString();
 
-      if (existingPage) {
+        // 2. 레이어 데이터 업데이트
+        const updatedLayers = prev.layers.map(layer => {
+          if (layer.id === targetLayerId) {
+            return {
+              ...layer,
+              // boxes 배열에서 제거
+              boxes: layer.boxes.filter(box => box.id !== boxId),
+              // boxesByPage에서 제거
+              boxesByPage: {
+                ...layer.boxesByPage,
+                [pageNumber]: (layer.boxesByPage[pageNumber] || [])
+                  .filter(box => box.id !== boxId)
+              }
+            };
+          }
+          return layer;
+        });
+
+        // 3. 문서의 페이지 데이터 업데이트
+        const documentData = prev.layersByDocument[documentId] || {};
+        const pageData = documentData[pageKey];
+
+        const updatedLayersByDocument = {
+          ...prev.layersByDocument,
+          [documentId]: {
+            ...documentData,
+            [pageKey]: pageData ? {
+              ...pageData,
+              boxes: pageData.boxes.filter(box => box.id !== boxId)
+            } : pageData
+          }
+        };
+
+        // 4. 상태 업데이트
         return {
           ...prev,
           layers: updatedLayers,
-          selectedBox: prev.selectedBox?.id === boxId ? null : prev.selectedBox,
-          layersByDocument: {
-            ...prev.layersByDocument,
-            [documentId]: {
-              ...existingDocument,
-              [pageKey]: {
-                ...existingPage,
-                boxes: existingPage.boxes.filter(box => box.id !== boxId)
-              }
-            }
-          }
+          layersByDocument: updatedLayersByDocument,
+          // 선택된 박스가 삭제되는 박스인 경우 선택 해제
+          selectedBox: prev.selectedBox?.id === boxId ? null : prev.selectedBox
         };
+      } catch (error) {
+        console.error('박스 삭제 중 오류 발생:', error);
+        return prev;
       }
-
-      return {
-        ...prev,
-        layers: updatedLayers,
-        selectedBox: prev.selectedBox?.id === boxId ? null : prev.selectedBox
-      };
     });
   }, []);
 
@@ -500,8 +520,24 @@ export const useLayerManager = () => {
     }
   }, []);
 
+  const duplicateBox = useCallback((box: Box) => {
+    return {
+      ...box,
+      id: generateBoxId(),
+      metadata: {
+        ...box.metadata,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      }
+    };
+  }, [generateBoxId]);
+
   return {
-    ...state,
+    layers: state.layers,
+    activeLayer: state.activeLayer,
+    selectedBox: state.selectedBox,
+    currentPage: state.currentPage,
+    layersByDocument: state.layersByDocument,
     setLayers: (layers: Layer[]) => setState(prev => ({ ...prev, layers })),
     setActiveLayer: (layer: Layer | null) => setState(prev => ({ ...prev, activeLayer: layer })),
     setSelectedBox: (box: Box | null) => setState(prev => ({ ...prev, selectedBox: box })),
@@ -523,5 +559,7 @@ export const useLayerManager = () => {
     clearLayer,
     exportLayer,
     importLayer,
+    duplicateBox,
+    generateBoxId,
   };
 }; 

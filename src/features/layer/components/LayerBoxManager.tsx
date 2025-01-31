@@ -6,6 +6,8 @@ import type { Box as LayerBox } from '@/hooks/useLayerManager';
 import DraggablePopup from '@/components/common/DraggablePopup';
 import { createPortal } from 'react-dom';
 import BoxDetailEditor from '@/components/BoxDetailEditor';
+import { v4 as uuidv4 } from 'uuid';
+import { useLayerManager } from '../hooks/useLayerManager';
 
 interface LayerBoxManagerProps {
   isOpen: boolean;
@@ -164,6 +166,8 @@ export const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
   // 팝업 위치 상태 추가
   const [layerManagerPosition, setLayerManagerPosition] = useState({ x: 100, y: 100 });
   const [boxEditorPosition, setBoxEditorPosition] = useState({ x: 500, y: 100 });
+
+  const { generateBoxId } = useLayerManager();
 
   // 모든 페이지의 박스 정보 가져오기
   const allBoxes = useMemo(() => {
@@ -467,6 +471,7 @@ export const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
     e.stopPropagation();
     if (window.confirm('이 박스를 삭제하시겠습니까?')) {
       try {
+        console.log('b박스 삭제 요청:', box.id);
         await onBoxDelete(box.id);
         
         // 상태 초기화
@@ -481,6 +486,7 @@ export const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
         if (editingBox?.id === box.id) {
           setIsBoxEditorOpen(false);
           setEditingBox(null);
+          setIsBoxDetailOpen(false);
         }
         
         // 선택된 박스인 경우 선택 해제
@@ -490,6 +496,25 @@ export const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
         
         // 다중 선택된 박스 목록에서도 제거
         onBoxesSelect(selectedBoxes.filter(b => b.id !== box.id));
+
+        // 성공 메시지 표시
+        const popup = document.createElement('div');
+        popup.className = 'fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-red-100 border border-red-400 text-red-700 px-6 py-3 rounded shadow-lg z-[9999] flex items-center gap-2';
+        popup.innerHTML = `
+          <svg class="w-5 h-5 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+          </svg>
+          <span class="font-medium">박스가 삭제되었습니다</span>
+        `;
+        
+        document.body.appendChild(popup);
+        
+        setTimeout(() => {
+          popup.classList.add('opacity-0', 'transition-opacity', 'duration-300');
+          setTimeout(() => {
+            document.body.removeChild(popup);
+          }, 300);
+        }, 1500);
 
         // 페이지 데이터 강제 리렌더링을 위한 상태 업데이트
         setSearchTerm(prev => prev + '');
@@ -503,6 +528,7 @@ export const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
   // BoxDetailEditor에서 삭제 처리하는 핸들러 수정
   const handleBoxDetailDelete = async (boxId: string) => {
     try {
+      console.log('박스 삭제 요청:', boxId);
       await onBoxDelete(boxId);
       
       // 상태 초기화
@@ -516,6 +542,7 @@ export const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
       // 편집창 닫기
       setIsBoxEditorOpen(false);
       setEditingBox(null);
+      setIsBoxDetailOpen(false);
       
       // 선택된 박스인 경우 선택 해제
       if (selectedBox?.id === boxId) {
@@ -524,6 +551,25 @@ export const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
       
       // 다중 선택된 박스 목록에서도 제거
       onBoxesSelect(selectedBoxes.filter(b => b.id !== boxId));
+
+      // 성공 메시지 표시
+      const popup = document.createElement('div');
+      popup.className = 'fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-red-100 border border-red-400 text-red-700 px-6 py-3 rounded shadow-lg z-[9999] flex items-center gap-2';
+      popup.innerHTML = `
+        <svg class="w-5 h-5 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7"></path>
+        </svg>
+        <span class="font-medium">박스가 삭제되었습니다</span>
+      `;
+      
+      document.body.appendChild(popup);
+      
+      setTimeout(() => {
+        popup.classList.add('opacity-0', 'transition-opacity', 'duration-300');
+        setTimeout(() => {
+          document.body.removeChild(popup);
+        }, 300);
+      }, 1500);
 
       // 페이지 데이터 강제 리렌더링을 위한 상태 업데이트
       setSearchTerm(prev => prev + '');
@@ -1013,25 +1059,11 @@ export const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
 
       // 5. 새 레이어에 원본 박스들 복사
       const copyPromises = sourceBoxes.map(async (sourceBox) => {
-        // 새로운 박스 ID 생성
-        const newBoxId = `box_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-        
-        // 박스 정보 복사하면서 새로운 ID와 레이어 ID 설정
         const newBox = {
           ...sourceBox,
-          id: newBoxId,
+          id: generateBoxId(),
           layerId: newLayer.id,
-          // 기존 속성들 유지
-          text: sourceBox.text,
-          x: sourceBox.x,
-          y: sourceBox.y,
-          width: sourceBox.width,
-          height: sourceBox.height,
-          color: sourceBox.color,
-          pageNumber: sourceBox.pageNumber
         };
-
-        // 새 박스 추가
         await addBox(newBox);
       });
 
@@ -1048,6 +1080,31 @@ export const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
       console.error('레이어 복제 중 오류 발생:', error);
     }
   };
+
+  // 박스 생성 핸들러 수정
+  const handleCreateBox = useCallback((pageNumber: number, x: number, y: number, width: number, height: number) => {
+    const newBox: Box = {
+      id: generateBoxId(),
+      layerId: activeLayer?.id || '',
+      pageNumber,
+      x,
+      y,
+      width,
+      height,
+      type: 'box',
+      color: activeLayer?.color || '#000000',
+      text: '',
+      textItems: [],
+      metadata: {
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        extractedAt: new Date().toISOString()
+      }
+    };
+
+    addBox(newBox);
+    return newBox;
+  }, [activeLayer, generateBoxId, addBox]);
 
   // 툴바 렌더링 수정
   const renderToolbar = () => (

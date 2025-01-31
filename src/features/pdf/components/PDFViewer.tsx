@@ -132,6 +132,7 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
     clearLayer,
     exportLayer,
     importLayer,
+    generateBoxId,
   } = useLayerManager();
 
   // PDF 업로드 관리
@@ -142,6 +143,7 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
     if (!file || !activeLayer) return [];
     
     const pageData = getPageData(file.name, pageNumber);
+    console.log('AllBoxes - Page data:', pageNumber, pageData);
     if (!pageData) return [];
 
     return pageData.boxes.filter(box => 
@@ -169,22 +171,6 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
   // 박스 그리기 관련 상태 추가
   const [startPoint, setStartPoint] = useState<Point | null>(null);
   const [currentBox, setCurrentBox] = useState<DrawingBox | null>(null);
-
-  // boxesByPage Map을 관리하는 로직 추가
-  const [boxesByPage] = useState(() => new Map<number, Box[]>());
-
-  // 페이지별 박스 데이터 관리 함수
-  const updateBoxesByPage = useCallback((box: Box, action: 'add' | 'remove' | 'update') => {
-    if (!file) return;
-
-    boxesByPage.set(box.pageNumber, 
-      action === 'remove' 
-        ? (boxesByPage.get(box.pageNumber) || []).filter(b => b.id !== box.id)
-        : action === 'update'
-          ? (boxesByPage.get(box.pageNumber) || []).map(b => b.id === box.id ? box : b)
-          : [...(boxesByPage.get(box.pageNumber) || []), box]
-    );
-  }, [file, boxesByPage]);
 
   // 페이지별 텍스트 데이터 관리
   const [pageTextContents, setPageTextContents] = useState<{
@@ -373,45 +359,41 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
     return { text: extractedText, textItems };
   }, [pageTextContents, pdfDimensions, scale]);
 
-  // 박스 추가 핸들러
+  // 박스 추가 핸들러 수정
   const handleAddBox = useCallback((box: Box) => {
     if (!file || !activeLayer) {
       console.log('AddBox - Early return:', { hasFile: !!file, hasActiveLayer: !!activeLayer });
       return;
     }
     
-    const pageNumber = box.pageNumber;
-    
-    console.log('AddBox - Attempting to add box:', {
-      box,
+    console.log('AddBox - 박스 추가:', {
+      boxId: box.id,
       fileName: file.name,
       activeLayerId: activeLayer.id,
-      pageNumber
+      pageNumber: box.pageNumber
     });
 
     try {
-      // 페이지별 박스 데이터 업데이트
-      const currentBoxes = boxesByPage.get(pageNumber) || [];
-      boxesByPage.set(pageNumber, [...currentBoxes, box]);
-      
-      // 전체 박스 데이터에 추가
+      // 전체 박스 데이터에 추가 (useLayerManager의 addBox만 사용)
       addBox(file.name, box);
-      
-      
       return box;
     } catch (error) {
       console.error('AddBox - Error adding box:', error);
       return null;
     }
-  }, [file, activeLayer, boxesByPage, addBox]);
+  }, [file, activeLayer, addBox]);
 
-  // 박스 생성 핸들러
+  // 박스 생성 핸들러 수정
   const handleBoxCreated = useCallback((box: DrawingBox) => {
     if (!file || !activeLayer) return;
 
+    // 박스 ID를 한 번만 생성
+    const boxId = generateBoxId();
+    console.log('새로운 박스 ID 생성:', boxId);
+
     // 박스 좌표 정규화
     const normalizedBox: Box = {
-      id: `box_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      id: boxId,
       layerId: activeLayer.id,
       pageNumber: box.pageNumber,
       x: Math.min(box.x, box.x + box.width),
@@ -433,11 +415,13 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
     normalizedBox.text = text;
     normalizedBox.textItems = textItems;
 
+    console.log('박스 생성 완료:', { boxId, box: normalizedBox });
     handleAddBox(normalizedBox);
+    
     setCurrentBox(null);
     setStartPoint(null);
     setSelectedBox(normalizedBox);
-  }, [file, activeLayer, handleAddBox, setSelectedBox, extractTextFromBox]);
+  }, [file, activeLayer, handleAddBox, setSelectedBox, extractTextFromBox, generateBoxId]);
 
   // 파일 업로드 처리
   const handleFileUpload = async (file: File) => {
@@ -823,30 +807,23 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
 
   // 박스 삭제 핸들러 수정
   const handleRemoveBox = useCallback((boxId: string) => {
-    if (!file || !selectedBox) return;
+    if (!file) return;
     
-    const pageNum = selectedBox.pageNumber;
-    const currentBoxes = boxesByPage.get(pageNum) || [];
-    const box = currentBoxes.find(b => b.id === boxId);
+    console.log('RemoveBox - 박스 삭제:', { boxId, fileName: file.name });
     
-    if (box) {
-      // 페이지별 박스 데이터에서 제거
-      const updatedBoxes = currentBoxes.filter(b => b.id !== boxId);
-      boxesByPage.set(pageNum, updatedBoxes);
-      
-      // 전체 박스 데이터에서 제거
+    try {
+      // useLayerManager의 removeBox만 사용
       removeBox(file.name, boxId);
       
-      // 캡처된 이미지 캐시에서 제거
-      capturedBoxes.delete(boxId);
-      
       // 선택된 박스 초기화
-      if (selectedBox.id === boxId) {
+      if (selectedBox?.id === boxId) {
         setSelectedBox(null);
         setBoxImage(null);
       }
+    } catch (error) {
+      console.error('RemoveBox - Error removing box:', error);
     }
-  }, [file, selectedBox, boxesByPage, removeBox, setSelectedBox]);
+  }, [file, selectedBox, removeBox, setSelectedBox]);
 
   // 박스 업데이트 핸들러 수정
   const handleUpdateBox = useCallback((boxId: string, updates: Partial<Box>) => {
