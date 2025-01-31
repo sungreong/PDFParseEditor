@@ -846,6 +846,15 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
           
           if (!startBox || !endBox) return null;
 
+          // 연결선이 속한 레이어가 숨겨져 있으면 렌더링하지 않음
+          const edgeLayer = layers.find(l => l.id === edge.layerId);
+          if (!edgeLayer?.isVisible) return null;
+
+          // 시작 또는 끝 박스가 속한 레이어가 숨겨져 있으면 렌더링하지 않음
+          const startBoxLayer = layers.find(l => l.id === startBox.layerId);
+          const endBoxLayer = layers.find(l => l.id === endBox.layerId);
+          if (!startBoxLayer?.isVisible || !endBoxLayer?.isVisible) return null;
+
           const startPoint = getBoxCenter(startBox);
           const endPoint = getBoxCenter(endBox);
           const isSelected = selectedEdgeId === edge.id;

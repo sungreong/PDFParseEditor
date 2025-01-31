@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import type { Box } from '@/hooks/useLayerManager';
+import type { Box, Layer } from '@/types';
 import ReactMarkdown from 'react-markdown';
 import { PDFDocumentProxy } from 'pdfjs-dist';
 import { API_ENDPOINTS } from '../config/api';
@@ -15,7 +15,7 @@ interface BoxDetailEditorProps {
   documentName: string;
   viewerWidth: number;
   viewerHeight: number;
-  layers: { id: string; name: string; color: string }[];
+  layers: Layer[];
   isOpen: boolean;
   position?: { x: number; y: number };
   onPositionChange?: (position: { x: number; y: number }) => void;
@@ -612,7 +612,7 @@ const BoxDetailEditor: React.FC<BoxDetailEditorProps> = ({
       const deltaY = e.clientY - startPos.y;
 
       const newWidth = Math.max(400, Math.min(1200, startSize.width + deltaX));
-      const newHeight = Math.max(400, Math.min(1000, startSize.height + deltaY));
+      const newHeight = Math.max(400, Math.min(800, startSize.height + deltaY));
 
       setSize({ width: newWidth, height: newHeight });
     };
@@ -785,7 +785,7 @@ const BoxDetailEditor: React.FC<BoxDetailEditorProps> = ({
           className="absolute bottom-0 right-0 w-4 h-4 cursor-se-resize z-50"
           onMouseDown={handleMouseDown}
           style={{
-            background: 'linear-gradient(135deg, transparent 50%, #94a3b8 50%)',
+            background: 'linear-gradient(135deg, transparent 50%, #718096 50%)',
             borderBottomRightRadius: '0.375rem',
             touchAction: 'none'
           }}

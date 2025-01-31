@@ -152,7 +152,6 @@ export const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
   const [showEdgeTable, setShowEdgeTable] = useState(false);
   const [selectedEdge, setSelectedEdge] = useState<string | null>(null);
   const [selectedEdges, setSelectedEdges] = useState<Set<string>>(new Set());
-  const [showGroupTable, setShowGroupTable] = useState(false);
 
   // 연결선 관련 상태 추가
   const [startBox, setStartBox] = useState<Box | null>(null);
@@ -921,9 +920,13 @@ export const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
 
     return (
       <div className="flex flex-col h-full bg-white rounded-lg shadow-sm">
-        <div className="flex items-center gap-2 p-3 border-b bg-gray-50">
-          <span className="text-sm font-medium text-gray-800">그룹 목록</span>
-          <span className="text-xs text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full">({groups.length}개)</span>
+        <div className="flex items-center justify-between gap-2 p-3 border-b bg-gray-50">
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full">
+              {groups.length}개의 그룹
+            </span>
+          </div>
+          {/* 필요한 경우 여기에 그룹 관련 액션 버튼 추가 */}
         </div>
         <div className="flex-1 overflow-auto">
           <table className="min-w-full divide-y divide-gray-200">
@@ -999,26 +1002,48 @@ export const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
     );
   };
 
-  // 필터링된 엣지 목록 계산
-  const filteredEdges = useMemo(() => {
-    if (!edges) return [];
+  // 연결선 표시/숨김 상태를 관리하는 상태 추가
+  const [hiddenEdges, setHiddenEdges] = useState<Set<string>>(new Set());
+
+  // 레이어 표시/숨김 핸들러 수정
+  const handleVisibilityToggle = (layerId: string) => {
+    // 현재 레이어 찾기
+    const layer = layers.find(l => l.id === layerId);
+    if (!layer) return;
+
+    // 토글 후의 상태 계산 (현재 상태의 반대)
+    const willBeVisible = !layer.isVisible;
+
+    // 해당 레이어의 연결선들 찾기
+    const layerEdges = edges.filter(edge => 
+      edge.layerId === layerId || 
+      edge.startBox.layerId === layerId || 
+      edge.endBox.layerId === layerId
+    );
     
-    return edges.filter(edge => {
-      // 페이지 필터
-      if (selectedPage && edge.startBox.pageNumber !== selectedPage) return false;
-      
-      // 레이어 필터
-      if (edge.layerId !== layer?.id) return false;
-      
-      // 검색어 필터
-      if (searchTerm) {
-        const searchText = `${edge.startBox.text || ''} ${edge.endBox.text || ''}`.toLowerCase();
-        if (!searchText.includes(searchTerm.toLowerCase())) return false;
-      }
-      
-      return true;
+    // 각 연결선의 시각적 표시/숨김 상태 업데이트
+    layerEdges.forEach(edge => {
+      onEdgeUpdate(edge.id, { 
+        metadata: {
+          ...edge.metadata,
+          isVisible: willBeVisible
+        }
+      });
     });
-  }, [edges, selectedPage, layer?.id, searchTerm]);
+
+    // 레이어 표시/숨김 토글
+    onLayerVisibilityToggle(layerId);
+  };
+
+  // 연결선 필터링 로직 수정
+  const filteredEdges = useMemo(() => {
+    return edges.filter(edge => !hiddenEdges.has(edge.id));
+  }, [edges, hiddenEdges]);
+
+  // 연결선 렌더링 시 표시/숨김 상태 확인
+  const isEdgeVisible = useCallback((edgeId: string) => {
+    return !hiddenEdges.has(edgeId);
+  }, [hiddenEdges]);
 
   // 드래그 핸들러
   const handleDragStart = (e: React.MouseEvent) => {
@@ -1178,21 +1203,6 @@ export const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
             </div>
           </button>
           <button
-            onClick={() => setShowGroupTable(!showGroupTable)}
-            className={`px-4 py-2 min-w-[100px] text-xs font-medium transition-all duration-200 ${
-              showGroupTable 
-                ? 'bg-white text-blue-600 shadow-sm' 
-                : 'text-gray-600 hover:bg-gray-100'
-            }`}
-          >
-            <div className="flex items-center gap-2 justify-center">
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
-              </svg>
-              {showGroupTable ? '박스 목록' : '그룹 목록'}
-            </div>
-          </button>
-          <button
             onClick={() => setShowEdgeTable(!showEdgeTable)}
             className={`px-4 py-2 min-w-[100px] text-xs font-medium transition-all duration-200 ${
               showEdgeTable 
@@ -1328,13 +1338,18 @@ export const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
                   </div>
                   <div className="flex items-center gap-1">
                     <button
-                      onClick={() => onLayerVisibilityToggle(activeLayer.id)}
-                      className="p-1.5 text-gray-600 hover:bg-gray-100 rounded-md transition-colors"
-                      title="표시/숨김"
+                      onClick={() => handleVisibilityToggle(activeLayer.id)}
+                      className={`p-1.5 hover:bg-gray-100 rounded-md transition-colors ${
+                        activeLayer.isVisible ? 'text-blue-600' : 'text-gray-400'
+                      }`}
+                      title={`${activeLayer.isVisible ? '숨기기' : '표시하기'} (박스 및 연결선)`}
                     >
                       <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                        {activeLayer.isVisible ? (
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                        ) : (
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21" />
+                        )}
                       </svg>
                     </button>
                     <button
@@ -1525,11 +1540,27 @@ export const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
                     </table>
                   </div>
                 </div>
-              ) : showGroupTable ? (
-                renderGroupTable()
               ) : (
                 showDetails ? renderDetailView() : renderBoxTable()
               )}
+            </div>
+          )}
+
+          {/* 크기 조절 핸들 */}
+          <div
+            className="absolute bottom-0 right-0 w-4 h-4 cursor-se-resize z-50"
+            onMouseDown={handleMouseDown}
+            style={{
+              background: 'linear-gradient(135deg, transparent 50%, #718096 50%)',
+              borderBottomRightRadius: '0.375rem',
+              touchAction: 'none'
+            }}
+          />
+
+          {/* 크기 표시기 */}
+          {isResizing && (
+            <div className="absolute bottom-5 right-5 px-2 py-1 bg-gray-800 text-white text-xs rounded shadow-lg">
+              {Math.round(size.width)} × {Math.round(size.height)}
             </div>
           )}
         </div>
