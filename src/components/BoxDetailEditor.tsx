@@ -84,6 +84,10 @@ const BoxDetailEditor: React.FC<BoxDetailEditorProps> = ({
   const [isImageExpanded, setIsImageExpanded] = useState(false);
   const [isCapturing, setIsCapturing] = useState(false);
   const [activeTab, setActiveTab] = useState<'info' | 'text' | 'position'>('info');
+  const [size, setSize] = useState({ width: 400, height: 600 });
+  const [isResizing, setIsResizing] = useState(false);
+  const [startSize, setStartSize] = useState({ width: 0, height: 0 });
+  const [startPos, setStartPos] = useState({ x: 0, y: 0 });
 
   // 임시 모델 목록 (나중에 API로 받아올 수 있음)
   const availableModels = [
@@ -593,13 +597,48 @@ const BoxDetailEditor: React.FC<BoxDetailEditorProps> = ({
     }
   };
 
+  const handleMouseDown = (e: React.MouseEvent) => {
+    setIsResizing(true);
+    setStartPos({ x: e.clientX, y: e.clientY });
+    setStartSize({ width: size.width, height: size.height });
+    e.preventDefault();
+  };
+
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!isResizing) return;
+
+      const deltaX = e.clientX - startPos.x;
+      const deltaY = e.clientY - startPos.y;
+
+      const newWidth = Math.max(400, Math.min(1200, startSize.width + deltaX));
+      const newHeight = Math.max(400, Math.min(1000, startSize.height + deltaY));
+
+      setSize({ width: newWidth, height: newHeight });
+    };
+
+    const handleMouseUp = () => {
+      setIsResizing(false);
+    };
+
+    if (isResizing) {
+      window.addEventListener('mousemove', handleMouseMove);
+      window.addEventListener('mouseup', handleMouseUp);
+    }
+
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [isResizing, startPos, startSize]);
+
   return (
     <DraggablePopup
       isOpen={isOpen}
       onClose={() => onCancel?.()}
       title={`박스 상세 정보 - ${box.text?.substring(0, 30) || '텍스트 없음'}${box.text && box.text.length > 30 ? '...' : ''}`}
-      width="600px"
-      height="600px"
+      width={`${size.width}px`}
+      height={`${size.height}px`}
       zIndex={100}
       position={position}
       onPositionChange={onPositionChange}
@@ -615,7 +654,7 @@ const BoxDetailEditor: React.FC<BoxDetailEditorProps> = ({
         </button>
       }
     >
-      <div className="flex h-full bg-gray-50">
+      <div className="flex h-full flex-col bg-white/80 backdrop-blur-sm rounded-lg relative">
         {/* PDF 영역 이미지 인덱스 */}
         <div className="relative">
           <div 
@@ -740,6 +779,17 @@ const BoxDetailEditor: React.FC<BoxDetailEditorProps> = ({
             </button>
           </div>
         </div>
+
+        {/* 리사이즈 핸들 추가 */}
+        <div
+          className="absolute bottom-0 right-0 w-4 h-4 cursor-se-resize z-50"
+          onMouseDown={handleMouseDown}
+          style={{
+            background: 'linear-gradient(135deg, transparent 50%, #94a3b8 50%)',
+            borderBottomRightRadius: '0.375rem',
+            touchAction: 'none'
+          }}
+        />
       </div>
     </DraggablePopup>
   );

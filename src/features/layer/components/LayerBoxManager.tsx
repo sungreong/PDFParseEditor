@@ -138,8 +138,10 @@ export const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
   const [selectedBoxId, setSelectedBoxId] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [sortBy, setSortBy] = useState<'index' | 'position'>('index');
-  const [size, setSize] = useState({ width: 600, height: 800 });
+  const [size, setSize] = useState({ width: 800, height: 600 });
   const [isResizing, setIsResizing] = useState(false);
+  const [startSize, setStartSize] = useState({ width: 0, height: 0 });
+  const [startPos, setStartPos] = useState({ x: 0, y: 0 });
   const [selectedPage, setSelectedPage] = useState<number | null>(null);
   const [showDetails, setShowDetails] = useState(false);
   const [selectedBoxIds, setSelectedBoxIds] = useState<Set<string>>(new Set());
@@ -313,26 +315,22 @@ export const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
 
   const handleMouseDown = (e: React.MouseEvent) => {
     setIsResizing(true);
+    setStartPos({ x: e.clientX, y: e.clientY });
+    setStartSize({ width: size.width, height: size.height });
     e.preventDefault();
   };
 
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
       if (!isResizing) return;
-      
-      // 마우스 위치 기준으로 크기 계산
-      const container = document.querySelector('.layer-box-manager-container');
-      if (!container) return;
 
-      const rect = container.getBoundingClientRect();
-      const newWidth = e.clientX - rect.left;
-      const newHeight = e.clientY - rect.top;
-      
-      // 최소/최대 크기 제한 수정
-      const clampedWidth = Math.max(400, Math.min(1200, newWidth));
-      const clampedHeight = Math.max(400, Math.min(1000, newHeight));
-      
-      setSize({ width: clampedWidth, height: clampedHeight });
+      const deltaX = e.clientX - startPos.x;
+      const deltaY = e.clientY - startPos.y;
+
+      const newWidth = Math.max(400, Math.min(1200, startSize.width + deltaX));
+      const newHeight = Math.max(400, Math.min(1000, startSize.height + deltaY));
+
+      setSize({ width: newWidth, height: newHeight });
     };
 
     const handleMouseUp = () => {
@@ -348,7 +346,7 @@ export const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
     };
-  }, [isResizing, size]);
+  }, [isResizing, startPos, startSize]);
 
   const handleBoxSelect = (boxId: string) => {
     if (isMultiSelectMode) {
@@ -1283,13 +1281,13 @@ export const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
         isOpen={isOpen}
         onClose={onClose}
         title="레이어 & 박스 관리"
-        width="30vw"
-        height="70vh"
+        width={`${size.width}px`}
+        height={`${size.height}px`}
         zIndex={100}
         position={layerManagerPosition}
         onPositionChange={setLayerManagerPosition}
       >
-        <div className="flex h-full flex-col bg-white/80 backdrop-blur-sm rounded-lg">
+        <div className="flex h-full flex-col bg-white/80 backdrop-blur-sm rounded-lg relative">
           {/* 현재 레이어 정보 - 상단 고정 */}
           <div className="border-b border-gray-200/50 bg-white/95 shrink-0">
             {activeLayer ? (
@@ -1352,7 +1350,7 @@ export const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
                       title="복제"
                     >
                       <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2z" />
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-4a2 2 0 00-2-2h-2.343M11 7.343l1.657-1.657a2 2 0 012.828 0l2.829 2.829a2 2 0 010 2.828l-8.486 8.485M7 17h.01" />
                       </svg>
                     </button>
                     <button
@@ -1434,6 +1432,17 @@ export const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
               )}
             </div>
           )}
+
+          {/* 리사이즈 핸들 수정 */}
+          <div
+            className="absolute bottom-0 right-0 w-4 h-4 cursor-se-resize z-50"
+            onMouseDown={handleMouseDown}
+            style={{
+              background: 'linear-gradient(135deg, transparent 50%, #94a3b8 50%)',
+              borderBottomRightRadius: '0.375rem',
+              touchAction: 'none'
+            }}
+          />
         </div>
       </DraggablePopup>
 
