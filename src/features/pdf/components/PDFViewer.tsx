@@ -59,6 +59,29 @@ interface LayerBoxManagerProps {
   updateBox: (boxId: string, updates: Partial<Box>) => void;
 }
 
+// Edge 타입 수정
+interface Edge {
+  id: string;
+  startBoxId: string;
+  endBoxId: string;
+  layerId: string;
+  pageNumber: number;
+  type: 'arrow';
+  color: string;
+}
+
+interface EdgeWithBoxes extends Edge {
+  startBox: Box | null;
+  endBox: Box | null;
+}
+
+// PageEdges 타입 정의
+interface PageEdges {
+  [pageNumber: number]: {
+    [layerId: string]: Edge[];
+  };
+}
+
 const PDFViewer: React.FC<PDFViewerProps> = ({ 
   file, 
   onFileChange
@@ -383,11 +406,11 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
     }
   }, [file, activeLayer, addBox]);
 
-  // 박스 생성 핸들러 수정
+  // 박스 생성 핸들러 추가
   const handleBoxCreated = useCallback((box: DrawingBox) => {
     if (!file || !activeLayer) return;
 
-    // 박스 ID를 한 번만 생성
+    // 박스 ID 생성
     const boxId = generateBoxId();
     console.log('새로운 박스 ID 생성:', boxId);
 
@@ -411,17 +434,128 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
     };
 
     // 텍스트 추출
-    const { text, textItems } = extractTextFromBox(box.pageNumber, normalizedBox);
-    normalizedBox.text = text;
+    const pageTextContent = pageTextContents[box.pageNumber] || [];
+    const textItems: TextItem[] = [];
+    
+    // PDF 기본 크기 (A4)
+    const PDF_WIDTH = 595.276; // PDF 포인트 단위
+    const PDF_HEIGHT = 841.89; // PDF 포인트 단위
+
+    // 뷰포트와 PDF 사이의 스케일 계산
+    const viewportToPDFScaleX = PDF_WIDTH / pdfDimensions.baseWidth;
+    const viewportToPDFScaleY = PDF_HEIGHT / pdfDimensions.baseHeight;
+
+    // 박스 영역을 스케일 독립적인 좌표로 변환
+    const normalizedBoxArea = {
+      left: normalizedBox.x * scale,
+      right: (normalizedBox.x + normalizedBox.width) * scale,
+      top: normalizedBox.y * scale,
+      bottom: (normalizedBox.y + normalizedBox.height) * scale
+    };
+
+    // 각 텍스트 아이템 처리
+    pageTextContent.forEach((item: any) => {
+      const [itemScaleX, skewX, skewY, itemScaleY, pdfX, pdfY] = item.transform;
+      const pdfWidth = item.width;
+      const pdfHeight = item.height;
+
+      // PDF 좌표를 스케일 독립적인 뷰포트 좌표로 변환
+      const baseViewportX = (pdfX * pdfDimensions.baseWidth) / PDF_WIDTH;
+      const baseViewportY = pdfDimensions.baseHeight - ((pdfY + pdfHeight) * pdfDimensions.baseHeight / PDF_HEIGHT);
+      const baseViewportWidth = (pdfWidth * pdfDimensions.baseWidth) / PDF_WIDTH;
+      const baseViewportHeight = (pdfHeight * pdfDimensions.baseHeight) / PDF_HEIGHT;
+
+      // 현재 스케일에 맞춰 좌표 조정
+      const viewportX = baseViewportX * scale;
+      const viewportY = baseViewportY * scale;
+      const viewportWidth = baseViewportWidth * scale;
+      const viewportHeight = baseViewportHeight * scale;
+
+      // 텍스트 영역 확장 (여백 추가)
+      const padding = Math.min(viewportWidth, viewportHeight) * 0.2; // 20% 패딩
+      const expandedTextArea = {
+        left: viewportX - padding,
+        right: viewportX + viewportWidth + padding,
+        top: viewportY - padding,
+        bottom: viewportY + viewportHeight + padding
+      };
+
+      // 박스와 확장된 텍스트 영역의 겹침 확인
+      const isIntersecting = (
+        expandedTextArea.left < normalizedBoxArea.right &&
+        expandedTextArea.right > normalizedBoxArea.left &&
+        expandedTextArea.top < normalizedBoxArea.bottom &&
+        expandedTextArea.bottom > normalizedBoxArea.top
+      );
+
+      if (isIntersecting) {
+        // 겹치는 영역 계산
+        const intersection = {
+          left: Math.max(normalizedBoxArea.left, expandedTextArea.left),
+          right: Math.min(normalizedBoxArea.right, expandedTextArea.right),
+          top: Math.max(normalizedBoxArea.top, expandedTextArea.top),
+          bottom: Math.min(normalizedBoxArea.bottom, expandedTextArea.bottom)
+        };
+
+        const intersectionArea = 
+          (intersection.right - intersection.left) * 
+          (intersection.bottom - intersection.top);
+        
+        const textArea = 
+          (expandedTextArea.right - expandedTextArea.left) * 
+          (expandedTextArea.bottom - expandedTextArea.top);
+        
+        const overlapRatio = intersectionArea / textArea;
+
+        // 겹침 비율 임계값을 낮춤 (0.2)
+        if (overlapRatio > 0.2) {
+          textItems.push({
+            text: item.str,
+            x: baseViewportX,
+            y: baseViewportY,
+            width: baseViewportWidth,
+            height: baseViewportHeight,
+            transform: item.transform
+          });
+        }
+      }
+    });
+
+    // 텍스트 아이템을 위에서 아래로, 왼쪽에서 오른쪽으로 정렬
+    textItems.sort((a, b) => {
+      const lineThreshold = Math.min(a.height, b.height) * scale;
+      const yDiff = Math.abs(a.y - b.y);
+
+      if (yDiff <= lineThreshold) {
+        return a.x - b.x; // 같은 줄에서는 왼쪽에서 오른쪽으로
+      }
+      return a.y - b.y; // 다른 줄은 위에서 아래로
+    });
+
+    // 정렬된 텍스트 조합
+    normalizedBox.text = textItems
+      .map(item => item.text)
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .trim();
     normalizedBox.textItems = textItems;
 
-    console.log('박스 생성 완료:', { boxId, box: normalizedBox });
-    handleAddBox(normalizedBox);
-    
-    setCurrentBox(null);
-    setStartPoint(null);
-    setSelectedBox(normalizedBox);
-  }, [file, activeLayer, handleAddBox, setSelectedBox, extractTextFromBox, generateBoxId]);
+    console.log('추출된 텍스트:', {
+      text: normalizedBox.text,
+      itemCount: textItems.length,
+      items: textItems.map(item => ({
+        text: item.text,
+        position: {
+          x: item.x * scale,
+          y: item.y * scale
+        }
+      }))
+    });
+
+    // 박스 추가
+    addBox(file.name, normalizedBox);
+    return normalizedBox;
+  }, [file, activeLayer, scale, pdfDimensions, pageTextContents, addBox, generateBoxId]);
 
   // 파일 업로드 처리
   const handleFileUpload = async (file: File) => {
@@ -467,57 +601,6 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
     };
   };
 
-  // 연결선 렌더링 컴포넌트
-  const ConnectionLines = () => {
-    if (!activeLayer || !selectedConnection) return null;
-
-    const startBox = selectedConnection.startBox;
-    const endBox = selectedConnection.endBox;
-
-    if (!startBox || !endBox) return null;
-
-    return (
-      <svg 
-        className="absolute inset-0 pointer-events-none" 
-        style={{ 
-          width: pdfDimensions.width,
-          height: pdfDimensions.height,
-          transform: `scale(${scale})`,
-          transformOrigin: 'top left',
-          zIndex: 2 
-        }}
-      >
-        <defs>
-          <marker
-            id="arrowhead"
-            markerWidth="10"
-            markerHeight="7"
-            refX="9"
-            refY="3.5"
-            orient="auto"
-          >
-            <polygon
-              points="0 0, 10 3.5, 0 7"
-              fill={activeLayer.color}
-            />
-          </marker>
-        </defs>
-        <g key={selectedConnection.id}>
-          <line
-            x1={getBoxCenter(startBox).x}
-            y1={getBoxCenter(startBox).y}
-            x2={getBoxCenter(endBox).x}
-            y2={getBoxCenter(endBox).y}
-            stroke={activeLayer.color}
-            strokeWidth="2"
-            markerEnd="url(#arrowhead)"
-            style={{ pointerEvents: 'none' }}
-          />
-        </g>
-      </svg>
-    );
-  };
-
   // 다중 선택 상태 추가
   const [selectedBoxIds, setSelectedBoxIds] = useState<Set<string>>(new Set());
 
@@ -558,16 +641,94 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
     }
   };
 
-  // 박스 선택 핸들러
+  // 페이지별 엣지 상태 관리
+  const [pageEdges, setPageEdges] = useState<PageEdges>({});
+  const [isDrawingEdge, setIsDrawingEdge] = useState(false);
+  const [edgeStartBox, setEdgeStartBox] = useState<Box | null>(null);
+  const [tempEndPoint, setTempEndPoint] = useState<Point | null>(null);
+
+  // 엣지 추가 핸들러
+  const handleAddEdge = useCallback((startBox: Box, endBox: Box) => {
+    if (!activeLayer || startBox.pageNumber !== endBox.pageNumber) return;
+
+    const newEdge: Edge = {
+      id: `edge_${Date.now()}`,
+      startBoxId: startBox.id,
+      endBoxId: endBox.id,
+      layerId: activeLayer.id,
+      pageNumber: startBox.pageNumber,
+      type: 'arrow',
+      color: activeLayer.color
+    };
+
+    setPageEdges(prev => {
+      const pageNumber = startBox.pageNumber;
+      const layerId = activeLayer.id;
+      
+      const updatedEdges = {
+        ...prev,
+        [pageNumber]: {
+          ...prev[pageNumber],
+          [layerId]: [...(prev[pageNumber]?.[layerId] || []), newEdge]
+        }
+      };
+
+      // 엣지 데이터를 저장하는 로직을 여기에 추가할 수 있습니다
+      console.log('Added new edge:', newEdge);
+      console.log('Updated edges state:', updatedEdges);
+
+      return updatedEdges;
+    });
+  }, [activeLayer]);
+
+  // 엣지 삭제 핸들러
+  const handleRemoveEdge = useCallback((edgeId: string, pageNumber: number, layerId: string) => {
+    setPageEdges(prev => {
+      const updatedEdges = {
+        ...prev,
+        [pageNumber]: {
+          ...prev[pageNumber],
+          [layerId]: prev[pageNumber]?.[layerId]?.filter(edge => edge.id !== edgeId) || []
+        }
+      };
+
+      // 엣지 삭제 로직을 여기에 추가할 수 있습니다
+      console.log('Removed edge:', edgeId);
+      console.log('Updated edges state:', updatedEdges);
+
+      return updatedEdges;
+    });
+  }, []);
+
+  // 박스 클릭 핸들러 수정
   const handleBoxClick = useCallback((box: Box, openDetail: boolean = false) => {
-    if (isDrawingArrow) {
-      if (!startBox) {
-        setStartBox(box);
-      } else if (box.pageNumber === startBox.pageNumber) {
-        addConnection(startBox, box);
-        setStartBox(null);
-        setIsDrawingArrow(false);
+    if (isDrawingEdge) {
+      if (!edgeStartBox) {
+        // 시작 박스 설정
+        setEdgeStartBox(box);
+        setTempEndPoint(getBoxCenter(box));
+      } else {
+        // 시작 박스와 동일한 박스가 아니면 엣지 생성
+        if (box.id !== edgeStartBox.id) {
+          handleAddEdge(edgeStartBox, box);
+        }
+        // 엣지 그리기 상태 초기화
+        setEdgeStartBox(null);
+        setTempEndPoint(null);
       }
+      return;
+    }
+
+    if (toolState.isMultiSelectMode) {
+      setSelectedBoxIds(prev => {
+        const newSet = new Set(prev);
+        if (newSet.has(box.id)) {
+          newSet.delete(box.id);
+        } else {
+          newSet.add(box.id);
+        }
+        return newSet;
+      });
     } else {
       handleToolBoxSelect(box.id);
       if (openDetail) {
@@ -575,336 +736,9 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
         setIsBoxDetailOpen(true);
       }
     }
-  }, [isDrawingArrow, startBox, handleToolBoxSelect, addConnection, setSelectedBox]);
+  }, [isDrawingEdge, edgeStartBox, handleAddEdge, toolState.isMultiSelectMode, handleToolBoxSelect]);
 
-  // 페이지 렌더링
-  const renderPage = (pageNum: number) => {
-    const pageData = file ? getPageData(file.name, pageNum) : null;
-    
-    return (
-      <div
-        key={pageNum}
-        ref={(ref) => setPageRef(pageNum, ref)}
-        className="pdf-page-container relative"
-        data-page={pageNum}
-        onMouseDown={(e) => {
-          if (toolState.isDrawMode) {
-            handleCanvasMouseDown(e, pageNum);
-          }
-        }}
-        onMouseMove={(e) => {
-          if (toolState.isDrawMode) {
-            handleCanvasMouseMove(e, pageNum);
-          }
-        }}
-        onMouseUp={(e) => {
-          if (toolState.isDrawMode) {
-            handleCanvasMouseUp(e, pageNum);
-          }
-        }}
-        style={{
-          width: `${pdfDimensions.scaledWidth}px`,
-          height: `${pdfDimensions.scaledHeight}px`,
-          userSelect: toolState.isDrawMode ? 'none' : 'text',
-        }}
-      >
-        <div className="relative">
-          <Page
-            pageNumber={pageNum}
-            width={pdfDimensions.width}
-            height={pdfDimensions.height}
-            renderTextLayer={true}
-            renderAnnotationLayer={false}
-            scale={scale}
-            loading={
-              <div className="w-full h-[500px] flex items-center justify-center">
-                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900"></div>
-              </div>
-            }
-            onGetTextSuccess={(textContent) => {
-              console.log('=== PDF Text Content Retrieved ===');
-              console.log('Raw Text Content:', {
-                pageNumber: pageNum,
-                itemCount: textContent.items.length,
-                rawItems: textContent.items
-              });
-
-              const textItems = textContent.items.map((item: any, index: number) => {
-                const [scaleX, skewX, skewY, scaleY, x, y] = item.transform;
-                
-                console.log(`Text Item #${index}:`, {
-                  text: item.str,
-                  originalTransform: item.transform,
-                  coordinates: {
-                    x: x,
-                    y: y,
-                    width: item.width,
-                    height: item.height
-                  },
-                  transformMatrix: {
-                    scaleX,
-                    skewX,
-                    skewY,
-                    scaleY,
-                    translateX: x,
-                    translateY: y
-                  },
-                  fontSize: item.fontSize,
-                  fontName: item.fontName
-                });
-
-                return {
-                  text: item.str,
-                  x: item.transform[4],
-                  y: item.transform[5],
-                  width: item.width,
-                  height: item.height,
-                  transform: item.transform
-                };
-              });
-
-              console.log('Processed Text Items:', {
-                pageNumber: pageNum,
-                processedItemCount: textItems.length,
-                items: textItems.map(item => ({
-                  text: item.text,
-                  position: {
-                    x: item.x,
-                    y: item.y,
-                    width: item.width,
-                    height: item.height
-                  }
-                }))
-              });
-
-              setPageTextContents(prev => {
-                const updated = {
-                  ...prev,
-                  [pageNum]: textItems
-                };
-                console.log('Updated Page Text Contents:', {
-                  pageNumber: pageNum,
-                  totalPages: Object.keys(updated).length,
-                  currentPageItemCount: textItems.length
-                });
-                return updated;
-              });
-            }}
-          />
-          <style jsx global>{`
-            .react-pdf__Page__textContent {
-              pointer-events: ${toolState.isDrawMode ? 'none' : 'auto'} !important;
-              user-select: ${toolState.isDrawMode ? 'none' : 'text'} !important;
-              -webkit-user-select: ${toolState.isDrawMode ? 'none' : 'text'} !important;
-              -moz-user-select: ${toolState.isDrawMode ? 'none' : 'text'} !important;
-              -ms-user-select: ${toolState.isDrawMode ? 'none' : 'text'} !important;
-            }
-            .react-pdf__Page__textContent span {
-              opacity: 0.4;
-              cursor: ${toolState.isDrawMode ? 'crosshair' : 'text'};
-            }
-            .react-pdf__Page__textContent span::selection {
-              background: rgba(0, 0, 255, 0.3);
-            }
-          `}</style>
-          {/* 현재 그리고 있는 박스 미리보기 */}
-          {currentBox && toolState.isDrawMode && pageNum === currentBox.pageNumber && (
-            <div
-              className="absolute border-2 border-dashed pointer-events-none"
-              style={{
-                left: `${currentBox.x * scale}px`,
-                top: `${currentBox.y * scale}px`,
-                width: `${Math.abs(currentBox.width) * scale}px`,
-                height: `${Math.abs(currentBox.height) * scale}px`,
-                borderColor: activeLayer?.color || '#000',
-                backgroundColor: `${activeLayer?.color}20` || '#00000020'
-              }}
-            />
-          )}
-          {pageData?.boxes
-            .filter(box => box.pageNumber === pageNum)
-            .map(box => {
-              const layer = layers.find(l => l.id === box.layerId);
-              if (!layer?.isVisible) return null;
-              
-              const isSelected = selectedBoxIds.has(box.id);
-              const isEditing = editingBox?.id === box.id;
-              
-              return (
-                <div
-                  key={box.id}
-                  className={`absolute border-2 transition-all duration-200 ${
-                    isSelected 
-                      ? 'ring-2 ring-blue-500 shadow-lg' 
-                      : ''
-                  } ${
-                    isEditing
-                      ? 'ring-4 ring-blue-400 ring-opacity-50 border-blue-500 animate-pulse shadow-xl' 
-                      : ''
-                  }`}
-                  style={{
-                    left: `${box.x * scale}px`,
-                    top: `${box.y * scale}px`,
-                    width: `${box.width * scale}px`,
-                    height: `${box.height * scale}px`,
-                    borderColor: isSelected ? '#3B82F6' : (box.color || layer.color),
-                    backgroundColor: `${box.color || layer.color}20`,
-                    cursor: isDrawingArrow ? 'crosshair' : 'pointer',
-                    zIndex: isSelected || isEditing ? 10 : 1
-                  }}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleBoxClick(box, !toolState.isMultiSelectMode);
-                  }}
-                />
-              );
-            })}
-        </div>
-      </div>
-    );
-  };
-
-  // 박스 그리기 시작
-  const handleCanvasMouseDown = useCallback((e: React.MouseEvent<HTMLDivElement>, pageNum: number) => {
-    if (!toolState.isDrawMode || !activeLayer) return;
-    
-    const pdfContainer = e.currentTarget.querySelector('.react-pdf__Page') as HTMLElement;
-    if (!pdfContainer) return;
-
-    const pdfRect = pdfContainer.getBoundingClientRect();
-    const x = (e.clientX - pdfRect.left) / scale;
-    const y = (e.clientY - pdfRect.top) / scale;
-
-    setStartPoint({ x, y });
-    setCurrentBox({
-      x,
-      y,
-      width: 0,
-      height: 0,
-      pageNumber: pageNum
-    });
-  }, [toolState.isDrawMode, activeLayer, scale]);
-
-  const handleCanvasMouseMove = useCallback((e: React.MouseEvent<HTMLDivElement>, pageNum: number) => {
-    console.log('handleCanvasMouseMove', e);
-    if (!toolState.isDrawMode || !startPoint || !currentBox || !activeLayer) {
-      console.log('MouseMove - Early return:', {
-        toolState: toolState.isDrawMode,
-        hasStartPoint: !!startPoint,
-        hasCurrentBox: !!currentBox,
-        hasActiveLayer: !!activeLayer
-      });
-      return;
-    }
-    
-    const pdfContainer = e.currentTarget.querySelector('.react-pdf__Page') as HTMLElement;
-    if (!pdfContainer) {
-      console.log('MouseMove - No PDF container found');
-      return;
-    }
-
-    const pdfRect = pdfContainer.getBoundingClientRect();
-    const x = (e.clientX - pdfRect.left) / scale;
-    const y = (e.clientY - pdfRect.top) / scale;
-    
-    console.log('MouseMove - Coordinates:', {
-      startPoint,
-      currentBox,
-      newX: x,
-      newY: y,
-      calculatedWidth: x - startPoint.x,
-      calculatedHeight: y - startPoint.y
-    });
-
-    if (startPoint) {
-      setCurrentBox({
-        ...currentBox,
-        width: x - startPoint.x,
-        height: y - startPoint.y,
-        pageNumber: pageNum
-      });
-    }
-  }, [toolState.isDrawMode, startPoint, currentBox, activeLayer, scale]);
-
-  // 박스 그리기 완료
-  const handleCanvasMouseUp = useCallback(async (e: React.MouseEvent<HTMLDivElement>, pageNum: number) => {
-    if (!toolState.isDrawMode || !startPoint || !currentBox || !activeLayer || !file) {
-      return;
-    }
-    
-    const pdfContainer = e.currentTarget.querySelector('.react-pdf__Page') as HTMLElement;
-    if (!pdfContainer) return;
-
-    const pdfRect = pdfContainer.getBoundingClientRect();
-    const x = (e.clientX - pdfRect.left) / scale;
-    const y = (e.clientY - pdfRect.top) / scale;
-    
-    const width = Math.abs(x - startPoint.x);
-    const height = Math.abs(y - startPoint.y);
-    
-    const minSize = 10 / scale;
-    if (width > minSize && height > minSize) {
-      const newBox: DrawingBox = {
-        x: startPoint.x,
-        y: startPoint.y,
-        width: x - startPoint.x,
-        height: y - startPoint.y,
-        pageNumber: pageNum
-      };
-      
-      handleBoxCreated(newBox);
-    }
-
-    setStartPoint(null);
-    setCurrentBox(null);
-  }, [toolState.isDrawMode, startPoint, currentBox, activeLayer, file, scale, handleBoxCreated]);
-
-  // 박스 삭제 핸들러 수정
-  const handleRemoveBox = useCallback((boxId: string) => {
-    if (!file) return;
-    
-    console.log('RemoveBox - 박스 삭제:', { boxId, fileName: file.name });
-    
-    try {
-      // useLayerManager의 removeBox만 사용
-      removeBox(file.name, boxId);
-      
-      // 선택된 박스 초기화
-      if (selectedBox?.id === boxId) {
-        setSelectedBox(null);
-        setBoxImage(null);
-      }
-    } catch (error) {
-      console.error('RemoveBox - Error removing box:', error);
-    }
-  }, [file, selectedBox, removeBox, setSelectedBox]);
-
-  // 박스 업데이트 핸들러 수정
-  const handleUpdateBox = useCallback((boxId: string, updates: Partial<Box>) => {
-    if (!file || !activeLayer) return;
-    
-    console.log('UpdateBox - Attempting to update box:', {
-      boxId,
-      updates,
-      fileName: file.name,
-      activeLayerId: activeLayer.id
-    });
-
-    try {
-      updateBox(boxId, updates);
-      // 박스 크기나 위치가 변경된 경우 캐시된 이미지 삭제
-      if (updates.x !== undefined || updates.y !== undefined || 
-          updates.width !== undefined || updates.height !== undefined) {
-        capturedBoxes.delete(boxId);
-      }
-      setIsBoxEditorOpen(false);
-      setEditingBox(null);
-    } catch (error) {
-      console.error('UpdateBox - Error updating box:', error);
-    }
-  }, [file, activeLayer, updateBox]);
-
-  // 페이지 변경 시 데이터 초기화 확인
+  // 페이지 변경 핸들러 수정
   const handlePageChange = useCallback((newPage: number) => {
     const validatedPage = Math.max(1, Math.min(newPage, numPages));
     if (validatedPage === pageNumber) return;
@@ -915,8 +749,14 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
       numPages
     });
     
+    // 연결선 그리기 중이면 초기화
+    if (isDrawingEdge) {
+      setEdgeStartBox(null);
+      setTempEndPoint(null);
+    }
+    
     setPageNumber(validatedPage);
-  }, [pageNumber, numPages]);
+  }, [pageNumber, numPages, isDrawingEdge]);
 
   // PDF 로드 완료 시 모든 페이지 데이터 초기화
   const handlePDFLoadSuccess = useCallback(({ numPages }: { numPages: number }) => {
@@ -933,6 +773,15 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
           initializeDocumentPage(file.name, i);
         }
       }
+
+      // 페이지별 엣지 초기화
+      setPageEdges(prev => {
+        const newEdges: PageEdges = {};
+        for (let i = 1; i <= numPages; i++) {
+          newEdges[i] = prev[i] || {};
+        }
+        return newEdges;
+      });
 
       updateDocument(currentDocument.id, {
         ...currentDocument,
@@ -1112,6 +961,377 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
       captureBoxArea(box, true); // forceCapture를 true로 설정하여 강제로 새로 캡처
     }
   }, [selectedBox, captureBoxArea]);
+
+  // 엣지 렌더링 컴포넌트 수정
+  const renderEdges = useCallback((pageNum: number) => {
+    if (!activeLayer) return null;
+
+    const pageBoxes = file ? getPageData(file.name, pageNum)?.boxes || [] : [];
+    const currentPageEdges = pageEdges[pageNum]?.[activeLayer.id] || [];
+
+    // 화살표와 선 크기 조정
+    const arrowScale = Math.min(3, Math.max(1.5, 2 / scale));
+    const arrowWidth = 20 * arrowScale;  // 화살표 너비 증가
+    const arrowHeight = 16 * arrowScale;  // 화살표 높이 증가
+    const strokeWidth = Math.max(4, 6 / scale); // 선 두께 유지
+
+    return (
+      <svg 
+        className="absolute inset-0" 
+        style={{ 
+          width: '100%',
+          height: '100%',
+          transform: `scale(${scale})`,
+          transformOrigin: 'top left',
+          zIndex: 20,
+          pointerEvents: 'none',
+          overflow: 'visible'
+        }}
+      >
+        <defs>
+          <marker
+            id={`arrowhead-${pageNum}`}
+            markerWidth={arrowWidth}
+            markerHeight={arrowHeight}
+            refX={arrowWidth - 3}  // 화살표 위치 약간 조정
+            refY={arrowHeight / 2}
+            orient="auto"
+            markerUnits="userSpaceOnUse"
+            overflow="visible"
+          >
+            <polygon
+              points={`0 0, ${arrowWidth} ${arrowHeight/2}, 0 ${arrowHeight}`}
+              fill={activeLayer.color}
+              stroke={activeLayer.color}  // 화살표 테두리 추가
+              strokeWidth="1"  // 화살표 테두리 두께
+            />
+          </marker>
+        </defs>
+        
+        {/* 기존 연결선 */}
+        {currentPageEdges.map(edge => {
+          const startBox = pageBoxes.find(box => box.id === edge.startBoxId);
+          const endBox = pageBoxes.find(box => box.id === edge.endBoxId);
+          
+          if (!startBox || !endBox) return null;
+
+          const startPoint = getBoxCenter(startBox);
+          const endPoint = getBoxCenter(endBox);
+
+          return (
+            <g key={edge.id} style={{ overflow: 'visible' }}>
+              <line
+                x1={startPoint.x}
+                y1={startPoint.y}
+                x2={endPoint.x}
+                y2={endPoint.y}
+                stroke={edge.color}
+                strokeWidth={strokeWidth}
+                markerEnd={`url(#arrowhead-${pageNum})`}
+                style={{ overflow: 'visible' }}
+              />
+            </g>
+          );
+        })}
+        
+        {/* 임시 연결선 (그리는 중) */}
+        {isDrawingEdge && edgeStartBox && tempEndPoint && edgeStartBox.pageNumber === pageNum && (
+          <g style={{ overflow: 'visible' }}>
+            <line
+              x1={getBoxCenter(edgeStartBox).x}
+              y1={getBoxCenter(edgeStartBox).y}
+              x2={tempEndPoint.x}
+              y2={tempEndPoint.y}
+              stroke={activeLayer.color}
+              strokeWidth={strokeWidth}
+              strokeDasharray="5,5"
+              markerEnd={`url(#arrowhead-${pageNum})`}
+              style={{ overflow: 'visible' }}
+            />
+          </g>
+        )}
+      </svg>
+    );
+  }, [activeLayer, pageEdges, file, getPageData, scale, isDrawingEdge, edgeStartBox, tempEndPoint]);
+
+  // 마우스 이동 핸들러
+  const handleMouseMove = useCallback((e: React.MouseEvent<HTMLDivElement>, pageNum: number) => {
+    if (isDrawingEdge && edgeStartBox) {
+      const container = e.currentTarget;
+      if (!container) return;
+
+      const rect = container.getBoundingClientRect();
+      setTempEndPoint({
+        x: (e.clientX - rect.left) / scale,
+        y: (e.clientY - rect.top) / scale
+      });
+    }
+  }, [isDrawingEdge, edgeStartBox, scale]);
+
+  // 박스 그리기 시작
+  const handleCanvasMouseDown = useCallback((e: React.MouseEvent<HTMLDivElement>, pageNum: number) => {
+    if (!toolState.isDrawMode || !activeLayer) return;
+    
+    const container = e.currentTarget;
+    if (!container) return;
+
+    const rect = container.getBoundingClientRect();
+    const x = (e.clientX - rect.left) / scale;
+    const y = (e.clientY - rect.top) / scale;
+
+    setStartPoint({ x, y });
+    setCurrentBox({
+      x,
+      y,
+      width: 0,
+      height: 0,
+      pageNumber: pageNum
+    });
+  }, [toolState.isDrawMode, activeLayer, scale]);
+
+  // 박스 그리기 중
+  const handleCanvasMouseMove = useCallback((e: React.MouseEvent<HTMLDivElement>, pageNum: number) => {
+    if (!toolState.isDrawMode || !startPoint || !currentBox || !activeLayer) return;
+    
+    const container = e.currentTarget;
+    if (!container) return;
+
+    const rect = container.getBoundingClientRect();
+    const x = (e.clientX - rect.left) / scale;
+    const y = (e.clientY - rect.top) / scale;
+
+    setCurrentBox({
+      ...currentBox,
+      width: x - startPoint.x,
+      height: y - startPoint.y,
+      pageNumber: pageNum
+    });
+  }, [toolState.isDrawMode, startPoint, currentBox, activeLayer, scale]);
+
+  // 박스 그리기 완료
+  const handleCanvasMouseUp = useCallback((e: React.MouseEvent<HTMLDivElement>, pageNum: number) => {
+    if (!toolState.isDrawMode || !startPoint || !currentBox || !activeLayer || !file) return;
+    
+    const container = e.currentTarget;
+    if (!container) return;
+
+    const rect = container.getBoundingClientRect();
+    const x = (e.clientX - rect.left) / scale;
+    const y = (e.clientY - rect.top) / scale;
+    
+    const width = Math.abs(x - startPoint.x);
+    const height = Math.abs(y - startPoint.y);
+    
+    const minSize = 10 / scale;
+    if (width > minSize && height > minSize) {
+      const newBox: DrawingBox = {
+        x: startPoint.x,
+        y: startPoint.y,
+        width: x - startPoint.x,
+        height: y - startPoint.y,
+        pageNumber: pageNum
+      };
+      
+      handleBoxCreated(newBox);
+    }
+
+    setStartPoint(null);
+    setCurrentBox(null);
+  }, [toolState.isDrawMode, startPoint, currentBox, activeLayer, file, scale, handleBoxCreated]);
+
+  // 박스 삭제 핸들러
+  const handleRemoveBox = useCallback((boxId: string) => {
+    if (!file) return;
+    
+    try {
+      removeBox(file.name, boxId);
+      
+      // 선택된 박스 초기화
+      if (selectedBox?.id === boxId) {
+        setSelectedBox(null);
+        setBoxImage(null);
+      }
+    } catch (error) {
+      console.error('RemoveBox - Error removing box:', error);
+    }
+  }, [file, selectedBox, removeBox, setSelectedBox, setBoxImage]);
+
+  // 박스 업데이트 핸들러
+  const handleUpdateBox = useCallback((boxId: string, updates: Partial<Box>) => {
+    if (!file || !activeLayer) return;
+    
+    try {
+      updateBox(boxId, updates);
+      // 박스 크기나 위치가 변경된 경우 캐시된 이미지 삭제
+      if (updates.x !== undefined || updates.y !== undefined || 
+          updates.width !== undefined || updates.height !== undefined) {
+        capturedBoxes.delete(boxId);
+      }
+      setIsBoxEditorOpen(false);
+      setEditingBox(null);
+    } catch (error) {
+      console.error('UpdateBox - Error updating box:', error);
+    }
+  }, [file, activeLayer, updateBox]);
+
+  // 페이지 렌더링 함수 추가
+  const renderPage = useCallback((pageNum: number) => {
+    const pageData = file ? getPageData(file.name, pageNum) : null;
+    
+    return (
+      <div
+        key={pageNum}
+        ref={(ref) => setPageRef(pageNum, ref)}
+        className="pdf-page-container relative"
+        data-page={pageNum}
+        onMouseDown={(e) => {
+          if (toolState.isDrawMode) {
+            handleCanvasMouseDown(e, pageNum);
+          }
+        }}
+        onMouseMove={(e) => {
+          if (toolState.isDrawMode) {
+            handleCanvasMouseMove(e, pageNum);
+          }
+          if (isDrawingEdge) {
+            handleMouseMove(e, pageNum);
+          }
+        }}
+        onMouseUp={(e) => {
+          if (toolState.isDrawMode) {
+            handleCanvasMouseUp(e, pageNum);
+          }
+        }}
+        style={{
+          width: `${pdfDimensions.scaledWidth}px`,
+          height: `${pdfDimensions.scaledHeight}px`,
+          userSelect: toolState.isDrawMode || isDrawingEdge ? 'none' : 'text',
+          cursor: isDrawingEdge ? 'crosshair' : undefined
+        }}
+      >
+        <div className="relative">
+          <Page
+            pageNumber={pageNum}
+            width={pdfDimensions.width}
+            height={pdfDimensions.height}
+            renderTextLayer={true}
+            renderAnnotationLayer={false}
+            scale={scale}
+            loading={
+              <div className="w-full h-[500px] flex items-center justify-center">
+                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900"></div>
+              </div>
+            }
+            onGetTextSuccess={(textContent) => {
+              setPageTextContent(pageNum, textContent.items);
+            }}
+          />
+          <style jsx global>{`
+            .react-pdf__Page__textContent {
+              pointer-events: ${toolState.isDrawMode || isDrawingEdge ? 'none' : 'auto'} !important;
+              user-select: ${toolState.isDrawMode || isDrawingEdge ? 'none' : 'text'} !important;
+              -webkit-user-select: ${toolState.isDrawMode || isDrawingEdge ? 'none' : 'text'} !important;
+              -moz-user-select: ${toolState.isDrawMode || isDrawingEdge ? 'none' : 'text'} !important;
+              -ms-user-select: ${toolState.isDrawMode || isDrawingEdge ? 'none' : 'text'} !important;
+            }
+            .react-pdf__Page__textContent span {
+              opacity: 0.4;
+              cursor: ${toolState.isDrawMode || isDrawingEdge ? 'crosshair' : 'text'};
+            }
+            .react-pdf__Page__textContent span::selection {
+              background: rgba(0, 0, 255, 0.3);
+            }
+          `}</style>
+
+          {/* 현재 그리고 있는 박스 미리보기 */}
+          {currentBox && toolState.isDrawMode && pageNum === currentBox.pageNumber && (
+            <div
+              className="absolute border-2 border-dashed pointer-events-none"
+              style={{
+                left: `${currentBox.x * scale}px`,
+                top: `${currentBox.y * scale}px`,
+                width: `${Math.abs(currentBox.width) * scale}px`,
+                height: `${Math.abs(currentBox.height) * scale}px`,
+                borderColor: activeLayer?.color || '#000',
+                backgroundColor: `${activeLayer?.color}20` || '#00000020'
+              }}
+            />
+          )}
+
+          {/* 연결선 렌더링 */}
+          {renderEdges(pageNum)}
+
+          {/* 박스 렌더링 */}
+          {pageData?.boxes
+            .filter(box => box.pageNumber === pageNum)
+            .map(box => {
+              const layer = layers.find(l => l.id === box.layerId);
+              if (!layer?.isVisible) return null;
+              
+              const isSelected = toolState.isMultiSelectMode ? selectedBoxIds.has(box.id) : selectedBox?.id === box.id;
+              const isEditing = editingBox?.id === box.id;
+              
+              return (
+                <div
+                  key={box.id}
+                  className={`absolute border-2 transition-all duration-200 ${
+                    isSelected 
+                      ? 'ring-2 ring-blue-500 shadow-lg' 
+                      : ''
+                  } ${
+                    isEditing
+                      ? 'ring-4 ring-blue-400 ring-opacity-50 border-blue-500 animate-pulse shadow-xl' 
+                      : ''
+                  }`}
+                  style={{
+                    left: `${box.x * scale}px`,
+                    top: `${box.y * scale}px`,
+                    width: `${box.width * scale}px`,
+                    height: `${box.height * scale}px`,
+                    borderColor: isSelected ? '#3B82F6' : (box.color || layer.color),
+                    backgroundColor: `${box.color || layer.color}20`,
+                    cursor: isDrawingEdge ? 'crosshair' : 'pointer',
+                    zIndex: isSelected || isEditing ? 10 : 1
+                  }}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleBoxClick(box, !toolState.isMultiSelectMode && !isDrawingEdge);
+                  }}
+                  onMouseDown={(e) => {
+                    e.stopPropagation();
+                    if (isDrawingEdge) {
+                      handleBoxClick(box, false);
+                    }
+                  }}
+                />
+              );
+            })}
+        </div>
+      </div>
+    );
+  }, [
+    file,
+    scale,
+    pdfDimensions,
+    toolState.isDrawMode,
+    toolState.isMultiSelectMode,
+    isDrawingEdge,
+    currentBox,
+    activeLayer,
+    selectedBox,
+    selectedBoxIds,
+    editingBox,
+    handleBoxClick,
+    handleCanvasMouseDown,
+    handleCanvasMouseMove,
+    handleCanvasMouseUp,
+    handleMouseMove,
+    setPageRef,
+    setPageTextContent,
+    renderEdges,
+    getPageData,
+    layers
+  ]);
 
   return (
     <div className="flex flex-col items-center p-4 min-h-screen" ref={containerRef}>
@@ -1445,8 +1665,31 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
                 onImportLayer={importLayer}
                 isDrawMode={toolState.isDrawMode}
                 onToggleDrawMode={toolActions.onToggleDrawMode}
-                isDrawingArrow={isDrawingArrow}
-                onToggleArrowDrawing={() => setIsDrawingArrow(!isDrawingArrow)}
+                isDrawingArrow={isDrawingEdge}
+                onToggleArrowDrawing={() => setIsDrawingEdge(!isDrawingEdge)}
+                edges={Object.values(pageEdges).reduce<EdgeWithBoxes[]>((acc, pageData) => {
+                  Object.values(pageData).forEach((layerEdges: Edge[]) => {
+                    acc.push(...layerEdges.map(edge => ({
+                      ...edge,
+                      startBox: file ? getPageData(file.name, edge.pageNumber)?.boxes.find(box => box.id === edge.startBoxId) : null,
+                      endBox: file ? getPageData(file.name, edge.pageNumber)?.boxes.find(box => box.id === edge.endBoxId) : null
+                    })));
+                  });
+                  return acc;
+                }, [])}
+                onEdgeAdd={handleAddEdge}
+                onEdgeDelete={handleRemoveEdge}
+                onEdgeUpdate={(edge: Edge) => {
+                  setPageEdges(prev => ({
+                    ...prev,
+                    [edge.pageNumber]: {
+                      ...prev[edge.pageNumber],
+                      [edge.layerId]: prev[edge.pageNumber]?.[edge.layerId]?.map(e => 
+                        e.id === edge.id ? edge : e
+                      ) || []
+                    }
+                  }));
+                }}
                 connections={[]}
                 onConnectionDelete={deleteConnection}
                 onConnectionAdd={addConnection}
@@ -1469,10 +1712,6 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
                 onBoxesSelect={() => {}}
                 isMultiSelectMode={toolState.isMultiSelectMode}
                 onMultiSelectModeChange={toolActions.onToggleMultiSelect}
-                edges={[]}
-                onEdgeAdd={addConnection}
-                onEdgeDelete={deleteConnection}
-                onEdgeUpdate={updateConnection}
                 scale={scale}
                 currentPage={pageNumber}
                 addBox={handleAddBox}
@@ -1499,9 +1738,9 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
                 <span>박스 그리기</span>
               </button>
               <button
-                onClick={() => setIsDrawingArrow(!isDrawingArrow)}
+                onClick={() => setIsDrawingEdge(!isDrawingEdge)}
                 className={`px-4 py-2 rounded-lg flex items-center gap-2 ${
-                  isDrawingArrow 
+                  isDrawingEdge 
                     ? 'bg-blue-500 text-white hover:bg-blue-600' 
                     : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
                 } transition-colors`}

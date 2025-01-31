@@ -59,7 +59,7 @@ interface LayerBoxManagerProps {
   onMultiSelectModeChange: (isMultiSelect: boolean) => void;
   edges: Connection[];
   onEdgeAdd: (startBox: Box, endBox: Box) => void;
-  onEdgeDelete: (edgeId: string) => void;
+  onEdgeDelete: (edgeId: string, pageNumber: number, layerId: string) => void;
   onEdgeUpdate: (edgeId: string, updates: Partial<Connection>) => void;
   scale: number;
   currentPage: number;
@@ -151,6 +151,7 @@ export const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
   }>({ type: 'none', value: 0 });
   const [showEdgeTable, setShowEdgeTable] = useState(false);
   const [selectedEdge, setSelectedEdge] = useState<string | null>(null);
+  const [selectedEdges, setSelectedEdges] = useState<Set<string>>(new Set());
   const [showGroupTable, setShowGroupTable] = useState(false);
 
   // 연결선 관련 상태 추가
@@ -1391,36 +1392,122 @@ export const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
             <div className="flex-1 overflow-y-auto min-h-0 p-4 bg-white/95">
               {showEdgeTable ? (
                 <div className="h-full overflow-hidden flex flex-col">
-                  <div className="flex items-center gap-2 p-3 border-b bg-gray-50 shrink-0">
-                    <span className="text-sm font-medium text-gray-800">연결선 목록</span>
-                    <span className="text-xs text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full">({filteredEdges.length}개)</span>
+                  <div className="flex items-center justify-between p-3 border-b bg-gray-50 shrink-0">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-medium text-gray-800">연결선 목록</span>
+                      <span className="text-xs text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full">({filteredEdges.length}개)</span>
+                    </div>
+                    {selectedEdges.size > 0 && (
+                      <button
+                        onClick={() => {
+                          if (window.confirm(`선택한 ${selectedEdges.size}개의 연결선을 삭제하시겠습니까?`)) {
+                            selectedEdges.forEach(edgeId => {
+                              const edge = filteredEdges.find(e => e.id === edgeId);
+                              if (edge) {
+                                onEdgeDelete(edgeId, edge.startBox.pageNumber, edge.layerId);
+                              }
+                            });
+                            setSelectedEdges(new Set());
+                          }
+                        }}
+                        className="px-3 py-1.5 bg-red-500 text-black rounded-md text-xs hover:bg-red-600 transition-colors flex items-center gap-1.5"
+                      >
+                        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                        </svg>
+                        선택 삭제 ({selectedEdges.size}개)
+                      </button>
+                    )}
                   </div>
                   <div className="flex-1 overflow-auto">
                     <table className="min-w-full divide-y divide-gray-200">
                       <thead className="bg-gray-50 sticky top-0">
                         <tr>
+                          <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-8">
+                            <input
+                              type="checkbox"
+                              checked={filteredEdges.length > 0 && selectedEdges.size === filteredEdges.length}
+                              onChange={(e) => {
+                                if (e.target.checked) {
+                                  setSelectedEdges(new Set(filteredEdges.map(edge => edge.id)));
+                                } else {
+                                  setSelectedEdges(new Set());
+                                }
+                              }}
+                              className="w-3 h-3 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                            />
+                          </th>
                           <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">페이지</th>
-                          <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">시작 박스</th>
-                          <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">끝 박스</th>
+                          <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">시작 ID</th>
+                          <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">끝 ID</th>
+                          <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">길이</th>
                           <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">작업</th>
                         </tr>
                       </thead>
                       <tbody className="bg-white divide-y divide-gray-200">
-                        {filteredEdges.map(edge => (
-                          <tr key={edge.id} className="hover:bg-gray-50 transition-colors">
-                            <td className="px-3 py-2 whitespace-nowrap text-sm text-gray-900">{edge.startBox.pageNumber}</td>
-                            <td className="px-3 py-2 whitespace-nowrap text-sm text-gray-500">{edge.startBox.text || '(삭제됨)'}</td>
-                            <td className="px-3 py-2 whitespace-nowrap text-sm text-gray-500">{edge.endBox.text || '(삭제됨)'}</td>
-                            <td className="px-3 py-2 whitespace-nowrap text-right text-sm font-medium">
-                              <button
-                                onClick={() => onEdgeDelete(edge.id)}
-                                className="text-red-600 hover:text-red-900 text-xs"
-                              >
-                                삭제
-                              </button>
-                            </td>
-                          </tr>
-                        ))}
+                        {filteredEdges.map(edge => {
+                          // 연결선 길이 계산
+                          const startCenter = {
+                            x: edge.startBox.x + edge.startBox.width / 2,
+                            y: edge.startBox.y + edge.startBox.height / 2
+                          };
+                          const endCenter = {
+                            x: edge.endBox.x + edge.endBox.width / 2,
+                            y: edge.endBox.y + edge.endBox.height / 2
+                          };
+                          const length = Math.sqrt(
+                            Math.pow(endCenter.x - startCenter.x, 2) + 
+                            Math.pow(endCenter.y - startCenter.y, 2)
+                          );
+
+                          return (
+                            <tr key={edge.id} className="hover:bg-gray-50 transition-colors">
+                              <td className="px-3 py-2 whitespace-nowrap">
+                                <input
+                                  type="checkbox"
+                                  checked={selectedEdges.has(edge.id)}
+                                  onChange={(e) => {
+                                    const newSelectedEdges = new Set(selectedEdges);
+                                    if (e.target.checked) {
+                                      newSelectedEdges.add(edge.id);
+                                    } else {
+                                      newSelectedEdges.delete(edge.id);
+                                    }
+                                    setSelectedEdges(newSelectedEdges);
+                                  }}
+                                  className="w-3 h-3 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                                />
+                              </td>
+                              <td className="px-3 py-2 whitespace-nowrap text-sm text-gray-900">{edge.startBox.pageNumber}</td>
+                              <td className="px-3 py-2 whitespace-nowrap text-sm text-gray-500" title={edge.startBox.text}>
+                                {edge.startBox.id}
+                              </td>
+                              <td className="px-3 py-2 whitespace-nowrap text-sm text-gray-500" title={edge.endBox.text}>
+                                {edge.endBox.id}
+                              </td>
+                              <td className="px-3 py-2 whitespace-nowrap text-sm text-gray-500">
+                                {Math.round(length)}px
+                              </td>
+                              <td className="px-3 py-2 whitespace-nowrap text-right text-sm font-medium">
+                                <button
+                                  onClick={() => {
+                                    if (window.confirm('이 연결선을 삭제하시겠습니까?')) {
+                                      onEdgeDelete(edge.id, edge.startBox.pageNumber, edge.layerId);
+                                      setSelectedEdges(prev => {
+                                        const newSet = new Set(prev);
+                                        newSet.delete(edge.id);
+                                        return newSet;
+                                      });
+                                    }
+                                  }}
+                                  className="text-red-600 hover:text-red-900 text-xs"
+                                >
+                                  삭제
+                                </button>
+                              </td>
+                            </tr>
+                          );
+                        })}
                       </tbody>
                     </table>
                   </div>
@@ -1432,40 +1519,8 @@ export const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
               )}
             </div>
           )}
-
-          {/* 리사이즈 핸들 수정 */}
-          <div
-            className="absolute bottom-0 right-0 w-4 h-4 cursor-se-resize z-50"
-            onMouseDown={handleMouseDown}
-            style={{
-              background: 'linear-gradient(135deg, transparent 50%, #94a3b8 50%)',
-              borderBottomRightRadius: '0.375rem',
-              touchAction: 'none'
-            }}
-          />
         </div>
       </DraggablePopup>
-
-      {isBoxEditorOpen && editingBox && layer && (
-        <BoxDetailEditor
-          box={editingBox}
-          originalBox={editingBox}
-          onUpdate={handleBoxEditSave}
-          onCancel={() => {
-            setIsBoxEditorOpen(false);
-            setEditingBox(null);
-          }}
-          onDelete={handleBoxDetailDelete}
-          pageNumber={editingBox.pageNumber}
-          documentName={documentName}
-          viewerWidth={1200}
-          viewerHeight={800}
-          layers={[layer]}
-          isOpen={isBoxEditorOpen}
-          position={boxEditorPosition}
-          onPositionChange={setBoxEditorPosition}
-        />
-      )}
     </>
   );
 };
