@@ -66,6 +66,8 @@ interface LayerBoxManagerProps {
   pageNumber: number;
   addBox: (box: Box) => void;
   pdfDocument: PDFDocument | null;
+  onEdgeSelect?: (edgeId: string) => void;
+  selectedEdgeId?: string | null;
 }
 
 // 레이어 색상 팔레트 추가
@@ -134,6 +136,8 @@ export const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
   pageNumber,
   addBox,
   pdfDocument,
+  onEdgeSelect,
+  selectedEdgeId,
 }) => {
   const [selectedBoxId, setSelectedBoxId] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
@@ -1276,6 +1280,40 @@ export const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
     </div>
   );
 
+  // 엣지 선택 핸들러 수정
+  const handleEdgeSelect = useCallback((edge: Connection) => {
+    setSelectedEdge(edge.id);
+    setPageNumber(edge.startBox.pageNumber);
+    onEdgeSelect?.(edge.id);
+  }, [setPageNumber, onEdgeSelect]);
+
+  // 엣지 선택 해제 핸들러 추가
+  const handleEdgeDeselect = useCallback(() => {
+    if (selectedEdge) {
+      onEdgeUpdate(selectedEdge, { isSelected: false });
+      setSelectedEdge(null);
+    }
+  }, [selectedEdge, onEdgeUpdate]);
+
+  // 컴포넌트가 언마운트되거나 닫힐 때 선택 해제
+  useEffect(() => {
+    return () => {
+      handleEdgeDeselect();
+      if (onEdgeSelect) {
+        onEdgeSelect(null);
+      }
+    };
+  }, [handleEdgeDeselect, onEdgeSelect]);
+
+  // 다른 엣지를 선택할 때 이전 선택 해제
+  useEffect(() => {
+    if (selectedEdge) {
+      return () => {
+        handleEdgeDeselect();
+      };
+    }
+  }, [selectedEdge, handleEdgeDeselect]);
+
   return (
     <>
       <DraggablePopup
@@ -1437,32 +1475,28 @@ export const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
                               className="w-3 h-3 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
                             />
                           </th>
+                          <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">ID</th>
                           <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">페이지</th>
                           <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">시작 ID</th>
+                          <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">시작 좌표</th>
                           <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">끝 ID</th>
+                          <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">끝 좌표</th>
                           <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">길이</th>
                           <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">작업</th>
                         </tr>
                       </thead>
                       <tbody className="bg-white divide-y divide-gray-200">
                         {filteredEdges.map(edge => {
-                          // 연결선 길이 계산
-                          const startCenter = {
-                            x: edge.startBox.x + edge.startBox.width / 2,
-                            y: edge.startBox.y + edge.startBox.height / 2
-                          };
-                          const endCenter = {
-                            x: edge.endBox.x + edge.endBox.width / 2,
-                            y: edge.endBox.y + edge.endBox.height / 2
-                          };
-                          const length = Math.sqrt(
-                            Math.pow(endCenter.x - startCenter.x, 2) + 
-                            Math.pow(endCenter.y - startCenter.y, 2)
-                          );
-
                           return (
-                            <tr key={edge.id} className="hover:bg-gray-50 transition-colors">
-                              <td className="px-3 py-2 whitespace-nowrap">
+                            <tr 
+                              key={edge.id} 
+                              className={`hover:bg-gray-50 transition-colors cursor-pointer ${
+                                (selectedEdge === edge.id || selectedEdgeId === edge.id) ? 'bg-blue-50' : ''
+                              }`}
+                              onClick={() => handleEdgeSelect(edge)}
+                              title={`시작: ${edge.startBox.text || '(텍스트 없음)'}\n끝: ${edge.endBox.text || '(텍스트 없음)'}`}
+                            >
+                              <td className="px-3 py-2 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
                                 <input
                                   type="checkbox"
                                   checked={selectedEdges.has(edge.id)}
@@ -1478,19 +1512,17 @@ export const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
                                   className="w-3 h-3 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
                                 />
                               </td>
-                              <td className="px-3 py-2 whitespace-nowrap text-sm text-gray-900">{edge.startBox.pageNumber}</td>
-                              <td className="px-3 py-2 whitespace-nowrap text-sm text-gray-500" title={edge.startBox.text}>
-                                {edge.startBox.id}
-                              </td>
-                              <td className="px-3 py-2 whitespace-nowrap text-sm text-gray-500" title={edge.endBox.text}>
-                                {edge.endBox.id}
-                              </td>
-                              <td className="px-3 py-2 whitespace-nowrap text-sm text-gray-500">
-                                {Math.round(length)}px
-                              </td>
-                              <td className="px-3 py-2 whitespace-nowrap text-right text-sm font-medium">
+                              <td className="px-3 py-2 whitespace-nowrap text-xs text-gray-500">{edge.id}</td>
+                              <td className="px-3 py-2 whitespace-nowrap text-xs text-gray-500">{edge.startBox.pageNumber}</td>
+                              <td className="px-3 py-2 whitespace-nowrap text-xs text-gray-500">{edge.startBox.id}</td>
+                              <td className="px-3 py-2 whitespace-nowrap text-xs text-gray-500">({edge.startPoint.x}, {edge.startPoint.y})</td>
+                              <td className="px-3 py-2 whitespace-nowrap text-xs text-gray-500">{edge.endBox.id}</td>
+                              <td className="px-3 py-2 whitespace-nowrap text-xs text-gray-500">({edge.endPoint.x}, {edge.endPoint.y})</td>
+                              <td className="px-3 py-2 whitespace-nowrap text-xs text-gray-500">{edge.length}px</td>
+                              <td className="px-3 py-2 whitespace-nowrap text-right">
                                 <button
-                                  onClick={() => {
+                                  onClick={(e) => {
+                                    e.stopPropagation();
                                     if (window.confirm('이 연결선을 삭제하시겠습니까?')) {
                                       onEdgeDelete(edge.id, edge.startBox.pageNumber, edge.layerId);
                                       setSelectedEdges(prev => {
@@ -1498,6 +1530,9 @@ export const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
                                         newSet.delete(edge.id);
                                         return newSet;
                                       });
+                                      if (selectedEdge === edge.id) {
+                                        setSelectedEdge(null);
+                                      }
                                     }
                                   }}
                                   className="text-red-600 hover:text-red-900 text-xs"
@@ -1521,6 +1556,28 @@ export const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
           )}
         </div>
       </DraggablePopup>
+
+      {/* BoxDetailEditor */}
+      {isBoxEditorOpen && editingBox && layer && (
+        <BoxDetailEditor
+          box={editingBox}
+          originalBox={editingBox}
+          onUpdate={handleBoxEditSave}
+          onCancel={() => {
+            setIsBoxEditorOpen(false);
+            setEditingBox(null);
+          }}
+          onDelete={handleBoxDetailDelete}
+          pageNumber={editingBox.pageNumber}
+          documentName={documentName}
+          viewerWidth={1200}
+          viewerHeight={800}
+          layers={[layer]}
+          isOpen={isBoxEditorOpen}
+          position={boxEditorPosition}
+          onPositionChange={setBoxEditorPosition}
+        />
+      )}
     </>
   );
 };

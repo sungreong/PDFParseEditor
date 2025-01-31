@@ -17,6 +17,11 @@ import 'react-pdf/dist/esm/Page/TextLayer.css';
 import 'react-pdf/dist/esm/Page/AnnotationLayer.css';
 import BoxDetailEditor from '@/components/BoxDetailEditor';
 import { API_ENDPOINTS } from '@/config/api';
+import PDFToolbar from './toolbar/PDFToolbar';
+import DocumentSidebar from './sidebar/DocumentSidebar';
+import PDFContent from './content/PDFContent';
+import LayerSidebar from './sidebar/LayerSidebar';
+import { useLayerSidebarManager } from '@/features/layer/hooks/useLayerSidebarManager';
 
 // PDF.js 워커 설정
 pdfjs.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjs.version}/pdf.worker.js`;
@@ -70,11 +75,6 @@ interface Edge {
   color: string;
 }
 
-interface EdgeWithBoxes extends Edge {
-  startBox: Box | null;
-  endBox: Box | null;
-}
-
 // PageEdges 타입 정의
 interface PageEdges {
   [pageNumber: number]: {
@@ -116,14 +116,12 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
     isScrollMode,
     visiblePages,
     isSidebarOpen,
-    isLayerSidebarOpen,
     setNumPages,
     setPageNumber,
     setScale,
     setIsScrollMode,
     setVisiblePages,
     setIsSidebarOpen,
-    setIsLayerSidebarOpen,
   } = usePDFState();
 
   // 도구 상태 관리
@@ -646,6 +644,7 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
   const [isDrawingEdge, setIsDrawingEdge] = useState(false);
   const [edgeStartBox, setEdgeStartBox] = useState<Box | null>(null);
   const [tempEndPoint, setTempEndPoint] = useState<Point | null>(null);
+  const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
 
   // 엣지 추가 핸들러
   const handleAddEdge = useCallback((startBox: Box, endBox: Box) => {
@@ -665,19 +664,13 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
       const pageNumber = startBox.pageNumber;
       const layerId = activeLayer.id;
       
-      const updatedEdges = {
+      return {
         ...prev,
         [pageNumber]: {
           ...prev[pageNumber],
           [layerId]: [...(prev[pageNumber]?.[layerId] || []), newEdge]
         }
       };
-
-      // 엣지 데이터를 저장하는 로직을 여기에 추가할 수 있습니다
-      console.log('Added new edge:', newEdge);
-      console.log('Updated edges state:', updatedEdges);
-
-      return updatedEdges;
     });
   }, [activeLayer]);
 
@@ -692,11 +685,32 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
         }
       };
 
-      // 엣지 삭제 로직을 여기에 추가할 수 있습니다
-      console.log('Removed edge:', edgeId);
-      console.log('Updated edges state:', updatedEdges);
-
       return updatedEdges;
+    });
+
+    // 선택된 엣지였다면 선택 해제
+    if (selectedEdgeId === edgeId) {
+      setSelectedEdgeId(null);
+    }
+  }, [selectedEdgeId]);
+
+  // 엣지 업데이트 핸들러
+  const handleEdgeUpdate = useCallback((edgeId: string, updates: Partial<Edge>) => {
+    setPageEdges(prev => {
+      const newEdges = { ...prev };
+      for (const pageNum in newEdges) {
+        for (const layerId in newEdges[pageNum]) {
+          const edgeIndex = newEdges[pageNum][layerId].findIndex(e => e.id === edgeId);
+          if (edgeIndex !== -1) {
+            newEdges[pageNum][layerId][edgeIndex] = {
+              ...newEdges[pageNum][layerId][edgeIndex],
+              ...updates
+            };
+            return newEdges;
+          }
+        }
+      }
+      return prev;
     });
   }, []);
 
@@ -850,26 +864,6 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
     const pdfWidth = (box.width * PDF_WIDTH) / pdfDimensions.baseWidth;
     const pdfHeight = (box.height * PDF_HEIGHT) / pdfDimensions.baseHeight;
 
-    console.log('좌표 변환:', {
-      original: {
-        x: box.x,
-        y: box.y,
-        width: box.width,
-        height: box.height
-      },
-      converted: {
-        x: pdfX,
-        y: pdfY,
-        width: pdfWidth,
-        height: pdfHeight
-      },
-      scale,
-      dimensions: {
-        pdf: { width: PDF_WIDTH, height: PDF_HEIGHT },
-        viewport: { width: pdfDimensions.baseWidth, height: pdfDimensions.baseHeight }
-      }
-    });
-
     return {
       x: Math.round(pdfX),
       y: Math.round(pdfY),
@@ -877,90 +871,6 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
       height: Math.round(pdfHeight)
     };
   }, [pdfDimensions, scale]);
-
-  // 캡처 함수 수정
-  const captureBoxArea = useCallback(async (targetBox: Box, forceCapture: boolean = false) => {
-    if (!file || !targetBox) {
-      console.warn('필수 정보가 누락되었습니다:', { file, targetBox });
-      return;
-    }
-
-    // 이미 캡처된 박스인지 확인
-    const existingImage = capturedBoxes.get(targetBox.id);
-    if (existingImage && !forceCapture) {
-      console.log('이미 캡처된 박스입니다. 캐시된 이미지를 사용합니다:', targetBox.id);
-      setBoxImage(existingImage);
-      return;
-    }
-
-    try {
-      setIsCapturing(true);
-
-      // 박스 좌표를 PDF 좌표계로 변환
-      const pdfCoordinates = convertToServerCoordinates(targetBox);
-
-      console.log('캡처 요청 데이터:', {
-        box_id: targetBox.id,
-        original: {
-          x: targetBox.x,
-          y: targetBox.y,
-          width: targetBox.width,
-          height: targetBox.height,
-        },
-        converted: pdfCoordinates,
-        scale,
-        viewer: {
-          width: pdfDimensions.width,
-          height: pdfDimensions.height,
-          baseWidth: pdfDimensions.baseWidth,
-          baseHeight: pdfDimensions.baseHeight
-        }
-      });
-
-      const response = await fetch(API_ENDPOINTS.CAPTURE_BOX(file.name, targetBox.pageNumber), {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          box_id: targetBox.id,
-          ...pdfCoordinates,
-          viewer_width: Math.round(pdfDimensions.baseWidth),
-          viewer_height: Math.round(pdfDimensions.baseHeight),
-          scale: scale
-        }),
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ detail: '알 수 없는 오류가 발생했습니다.' }));
-        throw new Error(errorData.detail || '캡처 요청 실패');
-      }
-
-      const blob = await response.blob();
-      if (blob.size === 0) {
-        throw new Error('빈 이미지가 반환되었습니다.');
-      }
-
-      const imageUrl = URL.createObjectURL(blob);
-      setBoxImage(imageUrl);
-      capturedBoxes.set(targetBox.id, imageUrl); // 캡처된 이미지 캐시
-      setSelectedBoxForCapture(targetBox);
-    } catch (error) {
-      console.error('PDF 영역 캡처 실패:', error);
-      setBoxImage(null);
-      capturedBoxes.delete(targetBox.id); // 에러 발생 시 캐시에서 제거
-    } finally {
-      setIsCapturing(false);
-    }
-  }, [file, scale, pdfDimensions, convertToServerCoordinates]);
-
-  // 캡처 새로고침 핸들러 추가
-  const handleRefreshCapture = useCallback((boxId: string) => {
-    const box = selectedBox;
-    if (box && box.id === boxId) {
-      captureBoxArea(box, true); // forceCapture를 true로 설정하여 강제로 새로 캡처
-    }
-  }, [selectedBox, captureBoxArea]);
 
   // 엣지 렌더링 컴포넌트 수정
   const renderEdges = useCallback((pageNum: number) => {
@@ -971,9 +881,9 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
 
     // 화살표와 선 크기 조정
     const arrowScale = Math.min(3, Math.max(1.5, 2 / scale));
-    const arrowWidth = 20 * arrowScale;  // 화살표 너비 증가
-    const arrowHeight = 16 * arrowScale;  // 화살표 높이 증가
-    const strokeWidth = Math.max(4, 6 / scale); // 선 두께 유지
+    const arrowWidth = 20 * arrowScale;
+    const arrowHeight = 16 * arrowScale;
+    const strokeWidth = Math.max(4, 6 / scale);
 
     return (
       <svg 
@@ -993,22 +903,32 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
             id={`arrowhead-${pageNum}`}
             markerWidth={arrowWidth}
             markerHeight={arrowHeight}
-            refX={arrowWidth - 3}  // 화살표 위치 약간 조정
+            refX={arrowWidth - 3}
             refY={arrowHeight / 2}
             orient="auto"
             markerUnits="userSpaceOnUse"
-            overflow="visible"
           >
-            <polygon
-              points={`0 0, ${arrowWidth} ${arrowHeight/2}, 0 ${arrowHeight}`}
+            <path
+              d={`M 0 0 L ${arrowWidth} ${arrowHeight/2} L 0 ${arrowHeight} z`}
               fill={activeLayer.color}
-              stroke={activeLayer.color}  // 화살표 테두리 추가
-              strokeWidth="1"  // 화살표 테두리 두께
+            />
+          </marker>
+          <marker
+            id={`arrowhead-selected-${pageNum}`}
+            markerWidth={arrowWidth}
+            markerHeight={arrowHeight}
+            refX={arrowWidth - 3}
+            refY={arrowHeight / 2}
+            orient="auto"
+            markerUnits="userSpaceOnUse"
+          >
+            <path
+              d={`M 0 0 L ${arrowWidth} ${arrowHeight/2} L 0 ${arrowHeight} z`}
+              fill="#3B82F6"
             />
           </marker>
         </defs>
         
-        {/* 기존 연결선 */}
         {currentPageEdges.map(edge => {
           const startBox = pageBoxes.find(box => box.id === edge.startBoxId);
           const endBox = pageBoxes.find(box => box.id === edge.endBoxId);
@@ -1017,26 +937,62 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
 
           const startPoint = getBoxCenter(startBox);
           const endPoint = getBoxCenter(endBox);
+          const isSelected = selectedEdgeId === edge.id;
 
           return (
-            <g key={edge.id} style={{ overflow: 'visible' }}>
+            <g key={edge.id}>
+              {/* 선택된 엣지의 강조 효과 */}
+              {isSelected && isBoxDetailOpen && (
+                <>
+                  {/* 배경 글로우 */}
+                  <line
+                    x1={startPoint.x}
+                    y1={startPoint.y}
+                    x2={endPoint.x}
+                    y2={endPoint.y}
+                    stroke="#3B82F6"
+                    strokeWidth={strokeWidth * 3}
+                    strokeOpacity={0.2}
+                    className="animate-pulse"
+                  />
+                  {/* 시작점 표시 */}
+                  <circle
+                    cx={startPoint.x}
+                    cy={startPoint.y}
+                    r={strokeWidth * 2}
+                    fill="#3B82F6"
+                    fillOpacity={0.3}
+                    className="animate-ping"
+                  />
+                  {/* 끝점 표시 */}
+                  <circle
+                    cx={endPoint.x}
+                    cy={endPoint.y}
+                    r={strokeWidth * 2}
+                    fill="#3B82F6"
+                    fillOpacity={0.3}
+                    className="animate-ping"
+                  />
+                </>
+              )}
+              {/* 메인 연결선 */}
               <line
                 x1={startPoint.x}
                 y1={startPoint.y}
                 x2={endPoint.x}
                 y2={endPoint.y}
-                stroke={edge.color}
-                strokeWidth={strokeWidth}
-                markerEnd={`url(#arrowhead-${pageNum})`}
-                style={{ overflow: 'visible' }}
+                stroke={isSelected && isBoxDetailOpen ? '#3B82F6' : edge.color}
+                strokeWidth={isSelected && isBoxDetailOpen ? strokeWidth * 1.5 : strokeWidth}
+                markerEnd={`url(#${isSelected && isBoxDetailOpen ? `arrowhead-selected-${pageNum}` : `arrowhead-${pageNum}`})`}
+                className={isSelected && isBoxDetailOpen ? 'animate-pulse' : ''}
               />
             </g>
           );
         })}
-        
+
         {/* 임시 연결선 (그리는 중) */}
         {isDrawingEdge && edgeStartBox && tempEndPoint && edgeStartBox.pageNumber === pageNum && (
-          <g style={{ overflow: 'visible' }}>
+          <g>
             <line
               x1={getBoxCenter(edgeStartBox).x}
               y1={getBoxCenter(edgeStartBox).y}
@@ -1046,13 +1002,17 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
               strokeWidth={strokeWidth}
               strokeDasharray="5,5"
               markerEnd={`url(#arrowhead-${pageNum})`}
-              style={{ overflow: 'visible' }}
             />
           </g>
         )}
       </svg>
     );
-  }, [activeLayer, pageEdges, file, getPageData, scale, isDrawingEdge, edgeStartBox, tempEndPoint]);
+  }, [activeLayer, pageEdges, file, getPageData, scale, selectedEdgeId, getBoxCenter, isBoxDetailOpen, isDrawingEdge, edgeStartBox, tempEndPoint]);
+
+  // LayerBoxManager에 selectedEdgeId 전달
+  const handleEdgeIdSelect = useCallback((edgeId: string) => {
+    setSelectedEdgeId(edgeId);
+  }, []);
 
   // 마우스 이동 핸들러
   const handleMouseMove = useCallback((e: React.MouseEvent<HTMLDivElement>, pageNum: number) => {
@@ -1333,6 +1293,23 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
     layers
   ]);
 
+  // LayerSidebar 관련 상태 및 핸들러
+  const {
+    isLayerSidebarOpen,
+    setIsLayerSidebarOpen,
+    handleAddLayer,
+    handleRemoveLayer,
+    handleToggleLayerVisibility,
+    handleSetActiveLayer,
+    handleDuplicateLayer,
+  } = useLayerSidebarManager({
+    addLayer,
+    removeLayer,
+    toggleLayerVisibility,
+    setActiveLayer,
+    duplicateLayer,
+  });
+
   return (
     <div className="flex flex-col items-center p-4 min-h-screen" ref={containerRef}>
       {!file && <PDFDropzone onFileUpload={handleFileUpload} />}
@@ -1428,218 +1405,38 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
             </div>
 
             {/* 메인 콘텐츠 */}
-            <div className={`flex-1 transition-all duration-300 ${isLayerSidebarOpen ? 'ml-80' : 'ml-0'} ${isSidebarOpen ? 'mr-80' : 'mr-0'}`}>
-              {/* 상단 툴바 */}
-              <div className="sticky top-0 z-10 bg-white shadow-sm mb-4">
-                <div className="flex items-center justify-between p-4">
-                  <button
-                    onClick={() => setIsLayerSidebarOpen(!isLayerSidebarOpen)}
-                    className="p-2 hover:bg-gray-100 rounded"
-                  >
-                    {isLayerSidebarOpen ? '◀' : '▶'}
-                  </button>
-                  <div className="flex items-center space-x-4">
-                    <button
-                      onClick={() => handlePageChange(pageNumber - 1)}
-                      disabled={pageNumber <= 1}
-                      className="px-4 py-2 bg-gray-100 rounded disabled:opacity-50"
-                    >
-                      이전
-                    </button>
-                    <span>
-                      {pageNumber} / {numPages}
-                    </span>
-                    <button
-                      onClick={() => handlePageChange(pageNumber + 1)}
-                      disabled={pageNumber >= numPages}
-                      className="px-4 py-2 bg-gray-100 rounded disabled:opacity-50"
-                    >
-                      다음
-                    </button>
-                  </div>
-                  <button
-                    onClick={() => setIsSidebarOpen(!isSidebarOpen)}
-                    className="p-2 hover:bg-gray-100 rounded"
-                  >
-                    {isSidebarOpen ? '▶' : '◀'}
-                  </button>
-                </div>
-              </div>
-
-              {/* PDF 뷰어 */}
-              <Document
-                file={file}
-                onLoadSuccess={handlePDFLoadSuccess}
-                className="mx-auto"
-              >
-                {isScrollMode ? (
-                  visiblePages.map(renderPage)
-                ) : (
-                  renderPage(pageNumber)
-                )}
-              </Document>
-            </div>
+            <PDFContent
+              isLayerSidebarOpen={isLayerSidebarOpen}
+              setIsLayerSidebarOpen={setIsLayerSidebarOpen}
+              isSidebarOpen={isSidebarOpen}
+              setIsSidebarOpen={setIsSidebarOpen}
+              pageNumber={pageNumber}
+              numPages={numPages}
+              handlePageChange={handlePageChange}
+              file={file}
+              handlePDFLoadSuccess={handlePDFLoadSuccess}
+              isScrollMode={isScrollMode}
+              visiblePages={visiblePages}
+              renderPage={renderPage}
+            />
 
             {/* 오른쪽 문서 정보 사이드바 */}
-            <div className={`fixed right-0 top-0 h-full bg-white shadow-lg transition-all duration-300 z-50 ${isSidebarOpen ? 'w-80' : 'w-0'}`}>
-              <div className="flex flex-col h-full">
-                <div className="p-4 border-b flex justify-between items-center">
-                  <h2 className="text-lg font-semibold">문서 정보</h2>
-                  <button
-                    onClick={() => setIsSidebarOpen(false)}
-                    className="p-2 hover:bg-gray-100 rounded"
-                  >
-                    ✕
-                  </button>
-                </div>
-                
-                <div className="flex-1 overflow-y-auto p-4">
-                  {/* 문서 정보 */}
-                  <div className="space-y-4">
-                    <div className="bg-gray-50 p-3 rounded">
-                      <h3 className="font-medium mb-2">기본 정보</h3>
-                      <div className="space-y-1 text-sm">
-                        <p><span className="font-medium">파일명:</span> {file.name}</p>
-                        <div className="flex items-center gap-2 mt-2">
-                          <span className="font-medium">페이지:</span>
-                          <div className="flex items-center gap-1">
-                            <button
-                              onClick={() => handlePageChange(pageNumber - 1)}
-                              disabled={pageNumber <= 1}
-                              className="px-2 py-1 bg-gray-100 rounded text-xs disabled:opacity-50"
-                            >
-                              ◀
-                            </button>
-                            <input
-                              type="number"
-                              min={1}
-                              max={numPages}
-                              value={pageNumber}
-                              onChange={(e) => {
-                                const value = parseInt(e.target.value);
-                                if (value >= 1 && value <= numPages) {
-                                  handlePageChange(value);
-                                }
-                              }}
-                              className="w-16 px-2 py-1 border rounded text-center text-xs"
-                            />
-                            <span className="text-xs">/ {numPages}</span>
-                            <button
-                              onClick={() => handlePageChange(pageNumber + 1)}
-                              disabled={pageNumber >= numPages}
-                              className="px-2 py-1 bg-gray-100 rounded text-xs disabled:opacity-50"
-                            >
-                              ▶
-                            </button>
-                          </div>
-                        </div>
-                        <p><span className="font-medium">생성일:</span> {currentDocument?.createdAt ? new Date(currentDocument.createdAt).toLocaleString() : '-'}</p>
-                        <p><span className="font-medium">수정일:</span> {currentDocument?.updatedAt ? new Date(currentDocument.updatedAt).toLocaleString() : '-'}</p>
-                      </div>
-                    </div>
-
-                    {/* 보기 설정 */}
-                    <div className="bg-white p-3 rounded border">
-                      <h3 className="font-medium mb-2">보기 설정</h3>
-                      <div className="space-y-3">
-                        <div className="flex items-center justify-between">
-                          <span className="text-sm">확대/축소</span>
-                          <div className="flex items-center gap-2">
-                            <select
-                              value={Math.round(scale * 100)}
-                              onChange={(e) => {
-                                const value = parseInt(e.target.value);
-                                setScale(value / 100);
-                              }}
-                              className="px-2 py-1 border rounded text-sm"
-                            >
-                              <option value="50">50%</option>
-                              <option value="75">75%</option>
-                              <option value="100">100%</option>
-                              <option value="125">125%</option>
-                              <option value="150">150%</option>
-                              <option value="175">175%</option>
-                              <option value="200">200%</option>
-                            </select>
-                            <div className="flex gap-1 ml-2">
-                              <button
-                                onClick={() => setScale(prev => Math.max(0.5, prev - 0.25))}
-                                className="px-2 py-1 bg-gray-100 rounded hover:bg-gray-200"
-                                title="25% 축소"
-                              >
-                                -
-                              </button>
-                              <button
-                                onClick={() => setScale(prev => Math.min(2, prev + 0.25))}
-                                className="px-2 py-1 bg-gray-100 rounded hover:bg-gray-200"
-                                title="25% 확대"
-                              >
-                                +
-                              </button>
-                            </div>
-                            <div className="flex gap-1 ml-2">
-                              <button
-                                onClick={() => setScale(1)}
-                                className="px-2 py-1 bg-gray-100 rounded hover:bg-gray-200 text-xs"
-                                title="기본 크기로 설정 (100%)"
-                              >
-                                맞춤
-                              </button>
-                            </div>
-                          </div>
-                        </div>
-                        <div className="flex items-center justify-between">
-                          <span className="text-sm">스크롤 모드</span>
-                          <button
-                            onClick={() => setIsScrollMode(!isScrollMode)}
-                            className={`px-3 py-1 rounded text-sm ${
-                              isScrollMode ? 'bg-blue-500 text-white' : 'bg-gray-100'
-                            }`}
-                          >
-                            {isScrollMode ? '켜짐' : '꺼짐'}
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* 현재 페이지 박스 정보 */}
-                    <div className="bg-white p-3 rounded border mt-4">
-                      <h3 className="font-medium mb-2">현재 페이지 박스 정보</h3>
-                      <div className="space-y-2">
-                        {file && getPageData(file.name, pageNumber)?.boxes
-                          .filter(box => box.pageNumber === pageNumber)
-                          .map((box: Box) => (
-                          <div key={box.id} className="text-sm p-2 bg-gray-50 rounded">
-                            <div className="flex justify-between items-center">
-                              <span className="text-gray-600">
-                                {box.text ? `${box.text.substring(0, 20)}${box.text.length > 20 ? '...' : ''}` : '(텍스트 없음)'}
-                              </span>
-                              <div className="flex gap-1">
-                                <button
-                                  onClick={() => handleEditBox(box)}
-                                  className="text-blue-500 hover:text-blue-700 text-xs"
-                                >
-                                  수정
-                                </button>
-                                <button
-                                  onClick={() => handleRemoveBox(box.id)}
-                                  className="text-red-500 hover:text-red-700 text-xs"
-                                >
-                                  삭제
-                                </button>
-                              </div>
-                            </div>
-                            <div className="text-xs text-gray-500 mt-1">
-                              크기: {Math.round(box.width / scale)}×{Math.round(box.height / scale)}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
+            <DocumentSidebar
+              isSidebarOpen={isSidebarOpen}
+              setIsSidebarOpen={setIsSidebarOpen}
+              file={file}
+              currentDocument={currentDocument}
+              pageNumber={pageNumber}
+              numPages={numPages}
+              scale={scale}
+              isScrollMode={isScrollMode}
+              handlePageChange={handlePageChange}
+              setScale={setScale}
+              setIsScrollMode={setIsScrollMode}
+              getPageData={getPageData}
+              handleEditBox={handleEditBox}
+              handleRemoveBox={handleRemoveBox}
+            />
 
             {/* LayerBoxManager */}
             {isBoxDetailOpen && activeLayer && (
@@ -1667,28 +1464,60 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
                 onToggleDrawMode={toolActions.onToggleDrawMode}
                 isDrawingArrow={isDrawingEdge}
                 onToggleArrowDrawing={() => setIsDrawingEdge(!isDrawingEdge)}
-                edges={Object.values(pageEdges).reduce<EdgeWithBoxes[]>((acc, pageData) => {
+                edges={Object.values(pageEdges).reduce<Connection[]>((acc, pageData: Record<string, Edge[]>) => {
                   Object.values(pageData).forEach((layerEdges: Edge[]) => {
-                    acc.push(...layerEdges.map(edge => ({
-                      ...edge,
-                      startBox: file ? getPageData(file.name, edge.pageNumber)?.boxes.find(box => box.id === edge.startBoxId) : null,
-                      endBox: file ? getPageData(file.name, edge.pageNumber)?.boxes.find(box => box.id === edge.endBoxId) : null
-                    })));
+                    const connections = layerEdges.map((edge: Edge) => {
+                      const pageData = getPageData(file.name, edge.pageNumber);
+                      const startBox = pageData?.boxes.find(box => box.id === edge.startBoxId);
+                      const endBox = pageData?.boxes.find(box => box.id === edge.endBoxId);
+                      
+                      if (startBox && endBox) {
+                        const startPoint = {
+                          x: Math.round(startBox.x + startBox.width / 2),
+                          y: Math.round(startBox.y + startBox.height / 2)
+                        };
+                        const endPoint = {
+                          x: Math.round(endBox.x + endBox.width / 2),
+                          y: Math.round(endBox.y + endBox.height / 2)
+                        };
+                        
+                        return {
+                          id: edge.id,
+                          startBox: {
+                            ...startBox,
+                            centerX: startPoint.x,
+                            centerY: startPoint.y
+                          },
+                          endBox: {
+                            ...endBox,
+                            centerX: endPoint.x,
+                            centerY: endPoint.y
+                          },
+                          layerId: edge.layerId,
+                          type: edge.type,
+                          color: edge.color,
+                          startPoint,
+                          endPoint,
+                          length: Math.round(Math.sqrt(
+                            Math.pow(endPoint.x - startPoint.x, 2) + 
+                            Math.pow(endPoint.y - startPoint.y, 2)
+                          ))
+                        } as Connection;
+                      }
+                      return null;
+                    }).filter((conn: Connection | null): conn is Connection => conn !== null);
+                    
+                    acc.push(...connections);
                   });
                   return acc;
                 }, [])}
                 onEdgeAdd={handleAddEdge}
                 onEdgeDelete={handleRemoveEdge}
-                onEdgeUpdate={(edge: Edge) => {
-                  setPageEdges(prev => ({
-                    ...prev,
-                    [edge.pageNumber]: {
-                      ...prev[edge.pageNumber],
-                      [edge.layerId]: prev[edge.pageNumber]?.[edge.layerId]?.map(e => 
-                        e.id === edge.id ? edge : e
-                      ) || []
-                    }
-                  }));
+                onEdgeUpdate={(edgeId: string, updates: Partial<Connection>) => {
+                  handleEdgeUpdate(edgeId, {
+                    ...updates,
+                    type: 'arrow'
+                  } as Partial<Edge>);
                 }}
                 connections={[]}
                 onConnectionDelete={deleteConnection}
@@ -1717,86 +1546,29 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
                 addBox={handleAddBox}
                 removeBox={handleRemoveBox}
                 updateBox={handleUpdateBox}
+                onEdgeSelect={handleEdgeIdSelect}
+                selectedEdgeId={selectedEdgeId}
               />
             )}
           </div>
 
           {/* 도구 모음 - 메인 콘텐츠 밖으로 이동 */}
-          <div className="fixed bottom-4 left-1/2 transform -translate-x-1/2 bg-white rounded-lg shadow-xl p-3 flex gap-3 z-[9999]">
-            <div className="flex items-center gap-3 border-r pr-3">
-              <button
-                onClick={toolActions.onToggleDrawMode}
-                className={`px-4 py-2 rounded-lg flex items-center gap-2 ${
-                  toolState.isDrawMode 
-                    ? 'bg-blue-500 text-white hover:bg-blue-600' 
-                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                } transition-colors`}
-              >
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 13h6m-3-3v6m5 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                </svg>
-                <span>박스 그리기</span>
-              </button>
-              <button
-                onClick={() => setIsDrawingEdge(!isDrawingEdge)}
-                className={`px-4 py-2 rounded-lg flex items-center gap-2 ${
-                  isDrawingEdge 
-                    ? 'bg-blue-500 text-white hover:bg-blue-600' 
-                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                } transition-colors`}
-              >
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 8l4 4m0 0l-4 4m4-4H3" />
-                </svg>
-                <span>연결선 그리기</span>
-              </button>
-              <button
-                onClick={toolActions.onToggleMultiSelect}
-                className={`px-4 py-2 rounded-lg flex items-center gap-2 ${
-                  toolState.isMultiSelectMode 
-                    ? 'bg-blue-500 text-white hover:bg-blue-600' 
-                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                } transition-colors`}
-              >
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 5h16M4 12h16m-7 7h7" />
-                </svg>
-                <span>다중 선택</span>
-              </button>
-            </div>
-            <div className="flex items-center gap-3">
-              <button
-                onClick={() => setScale(prev => Math.max(0.5, prev - 0.1))}
-                className="px-3 py-2 bg-gray-100 rounded-lg hover:bg-gray-200 text-gray-700 flex items-center gap-2"
-              >
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M20 12H4" />
-                </svg>
-                <span>축소</span>
-              </button>
-              <span className="min-w-[80px] text-center font-medium">{Math.round(scale * 100)}%</span>
-              <button
-                onClick={() => setScale(prev => Math.min(2, prev + 0.1))}
-                className="px-3 py-2 bg-gray-100 rounded-lg hover:bg-gray-200 text-gray-700 flex items-center gap-2"
-              >
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4" />
-                </svg>
-                <span>확대</span>
-              </button>
-            </div>
-            {selectedBoxIds.size > 0 && (
-              <button
-                onClick={handleMultipleDelete}
-                className="px-3 py-1.5 bg-red-500 text-white rounded-md text-sm hover:bg-red-600 transition-colors flex items-center gap-2"
-              >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                </svg>
-                선택한 박스 삭제 ({selectedBoxIds.size})
-              </button>
-            )}
-          </div>
+          <PDFToolbar
+            toolState={toolState}
+            toolActions={toolActions}
+            isDrawingEdge={isDrawingEdge}
+            setIsDrawingEdge={setIsDrawingEdge}
+            scale={scale}
+            setScale={setScale}
+            selectedBoxIds={selectedBoxIds}
+            handleMultipleDelete={handleMultipleDelete}
+            isSelectingEdge={selectedEdgeId !== null}
+            setIsSelectingEdge={(isSelecting) => {
+              if (!isSelecting) {
+                setSelectedEdgeId(null);
+              }
+            }}
+          />
 
           {/* 박스 편집기 */}
           {isBoxEditorOpen && editingBox && (
@@ -1821,6 +1593,20 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
               }}
             />
           )}
+
+          {/* LayerSidebar */}
+          <LayerSidebar
+            isLayerSidebarOpen={isLayerSidebarOpen}
+            setIsLayerSidebarOpen={setIsLayerSidebarOpen}
+            layers={layers}
+            activeLayer={activeLayer}
+            addLayer={handleAddLayer}
+            removeLayer={handleRemoveLayer}
+            toggleLayerVisibility={handleToggleLayerVisibility}
+            setActiveLayer={handleSetActiveLayer}
+            setIsBoxDetailOpen={setIsBoxDetailOpen}
+            duplicateLayer={handleDuplicateLayer}
+          />
         </>
       )}
     </div>
