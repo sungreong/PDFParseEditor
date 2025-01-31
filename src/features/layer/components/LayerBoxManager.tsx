@@ -350,21 +350,22 @@ export const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
     };
   }, [isResizing, size]);
 
-  const handleSelectBox = (boxId: string) => {
-    const box = allBoxes.find(b => b.id === boxId);
-    if (!box) return;
-
+  const handleBoxSelect = (boxId: string) => {
     if (isMultiSelectMode) {
-      // 다중 선택 모드일 때는 선택된 박스들 목록 업데이트
-      const isSelected = selectedBoxes.some(b => b.id === boxId);
-      if (isSelected) {
-        onBoxesSelect(selectedBoxes.filter(b => b.id !== boxId));
-      } else {
-        onBoxesSelect([...selectedBoxes, box]);
-      }
+      setSelectedBoxIds(prev => {
+        const newSet = new Set(prev);
+        if (newSet.has(boxId)) {
+          newSet.delete(boxId);
+        } else {
+          newSet.add(boxId);
+        }
+        return newSet;
+      });
     } else {
-      // 일반 모드일 때는 단일 박스 선택
-      onBoxSelect(box);
+      const box = allBoxes.find(b => b.id === boxId);
+      if (box) {
+        onBoxSelect(box);
+      }
     }
   };
 
@@ -374,7 +375,6 @@ export const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
     if (!pageData) return;
 
     const boxesInArea = pageData.boxes.filter(box => {
-      // 박스가 선택 영역과 겹치는지 확인
       const isOverlapping = (
         box.x < (selectionArea.x + selectionArea.width) &&
         (box.x + box.width) > selectionArea.x &&
@@ -382,20 +382,16 @@ export const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
         (box.y + box.height) > selectionArea.y
       );
 
-      // 겹치는 영역의 비율 계산
       if (isOverlapping) {
         const overlapX = Math.min(box.x + box.width, selectionArea.x + selectionArea.width) - Math.max(box.x, selectionArea.x);
         const overlapY = Math.min(box.y + box.height, selectionArea.y + selectionArea.height) - Math.max(box.y, selectionArea.y);
         const overlapArea = overlapX * overlapY;
         const boxArea = box.width * box.height;
-        
-        // 30% 이상 겹치는 경우에만 선택
         return overlapArea > boxArea * 0.3;
       }
       return false;
     });
 
-    // 선택된 박스들의 ID를 현재 선택 목록에 추가
     setSelectedBoxIds(prev => {
       const newSet = new Set(prev);
       boxesInArea.forEach(box => newSet.add(box.id));
@@ -405,6 +401,7 @@ export const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
 
   const handleDeleteSelected = () => {
     if (selectedBoxIds.size === 0) return;
+
     if (window.confirm(`선택한 ${selectedBoxIds.size}개의 박스를 삭제하시겠습니까?`)) {
       selectedBoxIds.forEach(boxId => {
         onBoxDelete(boxId);
@@ -440,7 +437,7 @@ export const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
 
     // 다중 선택 모드일 때는 체크박스 선택/해제
     if (isMultiSelectMode) {
-      handleSelectBox(box.id);
+      handleBoxSelect(box.id);
       return;
     }
 
@@ -579,9 +576,17 @@ export const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
     }
   };
 
+  // 텍스트 길이 제한 유틸리티 함수 추가
+  const truncateText = (text: string, maxLength: number = 50) => {
+    if (!text) return '(텍스트 없음)';
+    if (text.length <= maxLength) return text;
+    return text.slice(0, maxLength) + '...';
+  };
+
   // 박스 렌더링 수정
   const renderBox = (box: Box) => {
     const isSelected = selectedBoxIds.has(box.id);
+    const boxText = box.text || '';
     
     return (
       <div
@@ -593,16 +598,34 @@ export const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
         <div className="flex-1 min-w-0">
           <div className="flex items-center">
             <div
-              className="w-3 h-3 rounded-full mr-2"
+              className="w-3 h-3 rounded-full mr-2 flex-shrink-0"
               style={{ backgroundColor: box.color || '#000000' }}
             />
-            <span className="truncate">{box.text || '(텍스트 없음)'}</span>
-          </div>
-          <div className="text-xs text-gray-500 mt-1">
-            페이지 {box.pageNumber} | 위치: ({Math.round(box.x)}, {Math.round(box.y)})
+            <div className="flex flex-col min-w-0">
+              <div className="flex items-center">
+                <span className="truncate text-sm hover:text-clip" title={boxText}>
+                  {truncateText(boxText, 30)}
+                </span>
+                {boxText.length > 30 && (
+                  <button
+                    onClick={() => alert(boxText)}
+                    className="ml-1 text-blue-500 hover:text-blue-700 text-xs"
+                    title="전체 텍스트 보기"
+                  >
+                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                    </svg>
+                  </button>
+                )}
+              </div>
+              <div className="text-xs text-gray-500 mt-0.5">
+                페이지 {box.pageNumber} | 위치: ({Math.round(box.x)}, {Math.round(box.y)}) | 크기: {Math.round(box.width)}×{Math.round(box.height)}
+              </div>
+            </div>
           </div>
         </div>
-        <div className="flex items-center space-x-2">
+        <div className="flex items-center space-x-2 flex-shrink-0">
           <button
             onClick={(e) => handleEditBox(e, box)}
             className="p-1 hover:bg-gray-200 rounded"
@@ -617,7 +640,7 @@ export const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
             className="p-1 hover:bg-red-100 rounded"
             title="삭제"
           >
-            <svg className="w-4 h-4 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
             </svg>
           </button>
@@ -629,11 +652,10 @@ export const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
   // 박스 테이블 렌더링 수정
   const renderBoxTable = () => {
     const boxes = filteredBoxes || [];
-    const selected = selectedBoxes || [];
 
     return (
       <div className="flex flex-col h-full bg-white rounded-lg shadow-sm">
-        <div className="flex items-center gap-2 p-3 border-b bg-gray-50">
+        <div className="flex items-center justify-between gap-2 p-3 border-b bg-gray-50">
           <div className="flex items-center gap-2">
             <select
               value={textLengthFilter.type}
@@ -655,24 +677,33 @@ export const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
             )}
           </div>
           <div className="flex items-center gap-2">
+            {selectedBoxIds.size >= 2 && (
+              <button
+                onClick={handleDeleteSelected}
+                className="px-3 py-1.5 bg-red-500 text-black rounded-md text-xs hover:bg-red-600 transition-colors flex items-center gap-1.5"
+              >
+                <svg className="w-3.5 h-3.5 text-black" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                </svg>
+                선택 삭제 ({selectedBoxIds.size}개)
+              </button>
+            )}
             <button
-              onClick={() => onMultiSelectModeChange(!isMultiSelectMode)}
-              className={`px-3 py-1 rounded-md text-xs transition-colors ${
+              onClick={() => {
+                onMultiSelectModeChange(!isMultiSelectMode);
+                setSelectedBoxIds(new Set());
+              }}
+              className={`px-3 py-1.5 rounded-md text-xs transition-colors flex items-center gap-1.5 ${
                 isMultiSelectMode 
                   ? 'bg-blue-100 text-blue-700 hover:bg-blue-200' 
                   : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
               }`}
             >
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 6h16M4 10h16M4 14h16M4 18h16" />
+              </svg>
               {isMultiSelectMode ? '다중 선택 끄기' : '다중 선택 켜기'}
             </button>
-            {selected.length >= 2 && (
-              <button
-                onClick={handleCreateGroup}
-                className="px-3 py-1 bg-green-100 text-green-700 rounded-md text-xs hover:bg-green-200 transition-colors"
-              >
-                그룹 생성 ({selected.length}개)
-              </button>
-            )}
           </div>
         </div>
         <div className="flex-1 overflow-auto">
@@ -682,12 +713,12 @@ export const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
                 <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-8">
                   <input
                     type="checkbox"
-                    checked={selected.length > 0 && selected.length === boxes.length}
+                    checked={boxes.length > 0 && selectedBoxIds.size === boxes.length}
                     onChange={(e) => {
                       if (e.target.checked) {
-                        onBoxesSelect(boxes);
+                        setSelectedBoxIds(new Set(boxes.map(box => box.id)));
                       } else {
-                        onBoxesSelect([]);
+                        setSelectedBoxIds(new Set());
                       }
                     }}
                     className="w-3 h-3 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
@@ -703,58 +734,90 @@ export const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
               {boxes.map((box) => {
-                const isSelected = selected.some(b => b.id === box.id);
+                const isSelected = selectedBoxIds.has(box.id);
+                const boxText = box.text || '';
                 return (
                   <tr 
                     key={box.id} 
                     className={`hover:bg-gray-50 transition-colors ${
                       isSelected ? 'bg-blue-50' : ''
                     }`}
-                    onClick={() => handleSelectBox(box.id)}
                   >
                     <td className="px-3 py-2 whitespace-nowrap">
                       <input
                         type="checkbox"
                         checked={isSelected}
-                        onChange={(e) => {
-                          e.stopPropagation();
-                          handleSelectBox(box.id);
-                        }}
+                        onChange={() => handleBoxSelect(box.id)}
                         className="w-3 h-3 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                        onClick={(e) => e.stopPropagation()}
                       />
                     </td>
-                    <td className="px-3 py-2 whitespace-nowrap text-sm text-gray-900">{box.pageNumber}</td>
-                    <td className="px-3 py-2 whitespace-nowrap text-sm text-gray-500">
+                    <td 
+                      className="px-3 py-2 whitespace-nowrap text-sm text-gray-900 cursor-pointer"
+                      onClick={() => handleBoxSelect(box.id)}
+                    >
+                      {box.pageNumber}
+                    </td>
+                    <td 
+                      className="px-3 py-2 whitespace-nowrap text-sm text-gray-500 cursor-pointer"
+                      onClick={() => handleBoxSelect(box.id)}
+                    >
                       {Math.round(box.x)},{Math.round(box.y)}
                     </td>
-                    <td className="px-3 py-2 whitespace-nowrap text-sm text-gray-500">
+                    <td 
+                      className="px-3 py-2 whitespace-nowrap text-sm text-gray-500 cursor-pointer"
+                      onClick={() => handleBoxSelect(box.id)}
+                    >
                       {Math.round(box.width)}×{Math.round(box.height)}
                     </td>
-                    <td className="px-3 py-2 whitespace-nowrap">
-                      {isSelected && (
-                        <div className="flex items-center gap-1">
-                          <div
-                            className="w-2 h-2 rounded-full"
-                            style={{ backgroundColor: box.color }}
-                          />
-                          <span className="text-sm text-gray-900">{box.text || '(텍스트 없음)'}</span>
-                        </div>
-                      )}
+                    <td 
+                      className="px-3 py-2 cursor-pointer"
+                      onClick={() => handleBoxSelect(box.id)}
+                    >
+                      <div className="flex items-center max-w-[200px]">
+                        <span className="text-sm text-gray-900 truncate" title={boxText}>
+                          {truncateText(boxText, 10)}
+                        </span>
+                        {boxText.length > 10 && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              alert(boxText);
+                            }}
+                            className="ml-1 text-blue-500 hover:text-blue-700"
+                            title="전체 텍스트 보기"
+                          >
+                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                            </svg>
+                          </button>
+                        )}
+                      </div>
                     </td>
-                    <td className="px-3 py-2 whitespace-nowrap text-sm text-gray-500">
-                      {box.text ? `${box.text.length}자` : '0자'}
+                    <td 
+                      className="px-3 py-2 whitespace-nowrap text-sm text-gray-500 cursor-pointer"
+                      onClick={() => handleBoxSelect(box.id)}
+                    >
+                      {boxText ? `${boxText.length}자` : '0자'}
                     </td>
                     <td className="px-3 py-2 whitespace-nowrap text-right text-sm font-medium">
                       {!isDrawingArrow && (
                         <>
                           <button
-                            onClick={(e) => handleEditBox(e, box)}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleEditBox(e, box);
+                            }}
                             className="text-blue-600 hover:text-blue-900 text-xs mr-2"
                           >
                             수정
                           </button>
                           <button
-                            onClick={(e) => handleBoxDelete(e, box)}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleBoxDelete(e, box);
+                            }}
                             className="text-red-600 hover:text-red-900 text-xs"
                           >
                             삭제
@@ -1108,81 +1171,107 @@ export const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
 
   // 툴바 렌더링 수정
   const renderToolbar = () => (
-    <div className="flex flex-wrap items-center gap-4 p-4 border-b border-gray-200 bg-white sticky top-0 z-10 shadow-sm">
-      {/* 문서 정보 */}
-      <div className="flex items-center gap-2 px-2 py-1 bg-gray-50 rounded-lg">
-        <span className="text-sm font-medium text-gray-800">{documentName}</span>
-        <span className="text-xs text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full">({numPages}페이지)</span>
+    <div className="flex flex-col gap-3 p-4 border-b border-gray-200 bg-white sticky top-0 z-10 shadow-sm">
+      {/* 상단 문서 정보 및 통계 */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 px-3 py-1.5 bg-gray-50 border border-gray-100 rounded-md">
+          </div>
+        </div>
+        
+        {/* 보기 모드 토글 버튼 그룹 */}
+        <div className="flex items-center bg-gray-50 border border-gray-100 rounded-md divide-x divide-gray-200">
+          <button
+            onClick={() => setShowDetails(!showDetails)}
+            className={`px-4 py-2 min-w-[100px] text-xs font-medium transition-all duration-200 ${
+              showDetails 
+                ? 'bg-white text-blue-600 shadow-sm' 
+                : 'text-gray-600 hover:bg-gray-100'
+            }`}
+          >
+            <div className="flex items-center gap-2 justify-center">
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 6h16M4 10h16M4 14h16M4 18h16" />
+              </svg>
+              {showDetails ? '목록보기' : '상세보기'}
+            </div>
+          </button>
+          <button
+            onClick={() => setShowGroupTable(!showGroupTable)}
+            className={`px-4 py-2 min-w-[100px] text-xs font-medium transition-all duration-200 ${
+              showGroupTable 
+                ? 'bg-white text-blue-600 shadow-sm' 
+                : 'text-gray-600 hover:bg-gray-100'
+            }`}
+          >
+            <div className="flex items-center gap-2 justify-center">
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+              </svg>
+              {showGroupTable ? '박스 목록' : '그룹 목록'}
+            </div>
+          </button>
+          <button
+            onClick={() => setShowEdgeTable(!showEdgeTable)}
+            className={`px-4 py-2 min-w-[100px] text-xs font-medium transition-all duration-200 ${
+              showEdgeTable 
+                ? 'bg-white text-blue-600 shadow-sm' 
+                : 'text-gray-600 hover:bg-gray-100'
+            }`}
+          >
+            <div className="flex items-center gap-2 justify-center">
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M7 11l5-5m0 0l5 5m-5-5v12" />
+              </svg>
+              {showEdgeTable ? '박스 목록' : '연결선 목록'}
+            </div>
+          </button>
+        </div>
       </div>
 
-      {/* 정렬 및 필터 */}
-      <div className="flex items-center gap-3">
-        <div className="relative">
+      {/* 하단 필터 및 검색 */}
+      <div className="flex items-center gap-4">
+        {/* 정렬 선택 */}
+        <div className="relative min-w-[140px]">
           <select
             value={sortBy}
             onChange={(e) => setSortBy(e.target.value as 'index' | 'position')}
-            className="appearance-none w-24 px-3 py-1.5 pr-8 bg-gray-50 border border-gray-200 rounded-md text-xs focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+            className="w-full appearance-none px-3 py-1.5 pr-8 bg-white border border-gray-200 rounded-md text-xs focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
           >
             <option value="index">기본 정렬</option>
             <option value="position">위치순</option>
           </select>
           <div className="absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none">
-            <svg className="w-3 h-3 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" />
             </svg>
           </div>
         </div>
 
-        {/* 검색 */}
-        <div className="relative flex-1 min-w-[200px]">
+        {/* 검색 필드 */}
+        <div className="relative flex-1">
           <input
             type="text"
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             placeholder="텍스트 검색..."
-            className="w-full px-3 py-1.5 pl-9 border border-gray-200 rounded-md text-xs focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+            className="w-full px-3 py-1.5 pl-9 bg-white border border-gray-200 rounded-md text-xs focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
           />
           <div className="absolute left-3 top-1/2 -translate-y-1/2">
             <svg className="w-3.5 h-3.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
             </svg>
           </div>
-        </div>
-      </div>
-
-      {/* 보기 모드 버튼 그룹 */}
-      <div className="flex items-center gap-2 ml-auto">
-        <div className="bg-gray-100 p-0.5 rounded-lg flex items-center gap-0.5">
-          <button
-            onClick={() => setShowDetails(!showDetails)}
-            className={`px-3 py-1.5 rounded-md text-xs transition-colors ${
-              showDetails 
-                ? 'bg-white text-blue-600 shadow-sm' 
-                : 'text-gray-600 hover:bg-gray-50'
-            }`}
-          >
-            {showDetails ? '목록보기' : '상세보기'}
-          </button>
-          <button
-            onClick={() => setShowGroupTable(!showGroupTable)}
-            className={`px-3 py-1.5 rounded-md text-xs transition-colors ${
-              showGroupTable 
-                ? 'bg-white text-blue-600 shadow-sm' 
-                : 'text-gray-600 hover:bg-gray-50'
-            }`}
-          >
-            {showGroupTable ? '박스 목록' : '그룹 목록'}
-          </button>
-          <button
-            onClick={() => setShowEdgeTable(!showEdgeTable)}
-            className={`px-3 py-1.5 rounded-md text-xs transition-colors ${
-              showEdgeTable 
-                ? 'bg-white text-blue-600 shadow-sm' 
-                : 'text-gray-600 hover:bg-gray-50'
-            }`}
-          >
-            {showEdgeTable ? '박스 목록' : '연결선 목록'}
-          </button>
+          {searchTerm && (
+            <button
+              onClick={() => setSearchTerm('')}
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          )}
         </div>
       </div>
     </div>

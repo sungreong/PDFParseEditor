@@ -104,7 +104,7 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
   } = usePDFState();
 
   // 도구 상태 관리
-  const { toolState, toolActions, handleBoxSelect } = useToolState();
+  const { toolState, toolActions, handleBoxSelect: handleToolBoxSelect } = useToolState();
 
   // 레이어 관리
   const {
@@ -518,6 +518,65 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
     );
   };
 
+  // 다중 선택 상태 추가
+  const [selectedBoxIds, setSelectedBoxIds] = useState<Set<string>>(new Set());
+
+  // 다중 삭제 핸들러 추가
+  const handleMultipleDelete = async () => {
+    if (selectedBoxIds.size === 0) return;
+    
+    if (window.confirm(`선택한 ${selectedBoxIds.size}개의 박스를 삭제하시겠습니까?`)) {
+      try {
+        // 선택된 모든 박스 삭제
+        for (const boxId of selectedBoxIds) {
+          await handleRemoveBox(boxId);
+        }
+        
+        // 선택 상태 초기화
+        setSelectedBoxIds(new Set());
+        setSelectedBox(null);
+        
+        // 성공 메시지 표시
+        const popup = document.createElement('div');
+        popup.className = 'fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-red-100 border border-red-400 text-red-700 px-6 py-3 rounded shadow-lg z-[9999] flex items-center gap-2';
+        popup.innerHTML = `
+          <svg class="w-5 h-5 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7"></path>
+          </svg>
+          <span class="font-medium">${selectedBoxIds.size}개의 박스가 삭제되었습니다</span>
+        `;
+        
+        document.body.appendChild(popup);
+        setTimeout(() => {
+          popup.classList.add('opacity-0', 'transition-opacity', 'duration-300');
+          setTimeout(() => document.body.removeChild(popup), 300);
+        }, 1500);
+      } catch (error) {
+        console.error('박스 다중 삭제 중 오류 발생:', error);
+        alert('박스 삭제 중 오류가 발생했습니다.');
+      }
+    }
+  };
+
+  // 박스 선택 핸들러
+  const handleBoxClick = useCallback((box: Box, openDetail: boolean = false) => {
+    if (isDrawingArrow) {
+      if (!startBox) {
+        setStartBox(box);
+      } else if (box.pageNumber === startBox.pageNumber) {
+        addConnection(startBox, box);
+        setStartBox(null);
+        setIsDrawingArrow(false);
+      }
+    } else {
+      handleToolBoxSelect(box.id);
+      if (openDetail) {
+        setSelectedBox(box);
+        setIsBoxDetailOpen(true);
+      }
+    }
+  }, [isDrawingArrow, startBox, handleToolBoxSelect, addConnection, setSelectedBox]);
+
   // 페이지 렌더링
   const renderPage = (pageNum: number) => {
     const pageData = file ? getPageData(file.name, pageNum) : null;
@@ -663,44 +722,39 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
             />
           )}
           {pageData?.boxes
-            .filter(box => box.pageNumber === pageNum)  // 현재 페이지의 박스만 필터링
+            .filter(box => box.pageNumber === pageNum)
             .map(box => {
-              console.log('Rendering box:', { 
-                boxId: box.id, 
-                pageNum, 
-                boxPageNumber: box.pageNumber,
-                box: box
-              });
               const layer = layers.find(l => l.id === box.layerId);
               if (!layer?.isVisible) return null;
+              
+              const isSelected = selectedBoxIds.has(box.id);
+              const isEditing = editingBox?.id === box.id;
               
               return (
                 <div
                   key={box.id}
-                  className={`absolute border-2 ${selectedBox?.id === box.id ? 'ring-2 ring-blue-500' : ''}`}
+                  className={`absolute border-2 transition-all duration-200 ${
+                    isSelected 
+                      ? 'ring-2 ring-blue-500 shadow-lg' 
+                      : ''
+                  } ${
+                    isEditing
+                      ? 'ring-4 ring-blue-400 ring-opacity-50 border-blue-500 animate-pulse shadow-xl' 
+                      : ''
+                  }`}
                   style={{
                     left: `${box.x * scale}px`,
                     top: `${box.y * scale}px`,
                     width: `${box.width * scale}px`,
                     height: `${box.height * scale}px`,
-                    borderColor: box.color || layer.color,
+                    borderColor: isSelected ? '#3B82F6' : (box.color || layer.color),
                     backgroundColor: `${box.color || layer.color}20`,
-                    cursor: isDrawingArrow ? 'crosshair' : 'pointer'
+                    cursor: isDrawingArrow ? 'crosshair' : 'pointer',
+                    zIndex: isSelected || isEditing ? 10 : 1
                   }}
                   onClick={(e) => {
                     e.stopPropagation();
-                    if (isDrawingArrow) {
-                      if (!startBox) {
-                        setStartBox(box);
-                      } else if (box.pageNumber === startBox.pageNumber) {
-                        addConnection(startBox, box);
-                        setStartBox(null);
-                        setIsDrawingArrow(false);
-                      }
-                    } else {
-                      setSelectedBox(box);
-                      setIsBoxDetailOpen(true);
-                    }
+                    handleBoxClick(box, !toolState.isMultiSelectMode);
                   }}
                 />
               );
@@ -1492,6 +1546,17 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
                 <span>확대</span>
               </button>
             </div>
+            {selectedBoxIds.size > 0 && (
+              <button
+                onClick={handleMultipleDelete}
+                className="px-3 py-1.5 bg-red-500 text-white rounded-md text-sm hover:bg-red-600 transition-colors flex items-center gap-2"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                </svg>
+                선택한 박스 삭제 ({selectedBoxIds.size})
+              </button>
+            )}
           </div>
 
           {/* 박스 편집기 */}
