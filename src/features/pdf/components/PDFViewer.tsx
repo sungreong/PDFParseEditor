@@ -96,6 +96,9 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
   const [pageRefs, setPageRefs] = useState<{ [key: number]: HTMLDivElement | null }>({});
   const [isBoxEditorOpen, setIsBoxEditorOpen] = useState(false);
   const [editingBox, setEditingBox] = useState<Box | null>(null);
+  const [isAutoConnectMode, setIsAutoConnectMode] = useState(false);
+  // 페이지별 엣지 상태 추가
+  const [pageEdges, setPageEdges] = useState<PageEdges>({});
 
   // 문서 관리
   const {
@@ -212,29 +215,94 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
     }));
   }, []);
 
-  // 박스 추가 핸들러 수정
-  const handleAddBox = useCallback((box: Box) => {
-    if (!file || !activeLayer) {
-      console.log('AddBox - Early return:', { hasFile: !!file, hasActiveLayer: !!activeLayer });
+  // 박스 자동 연결 핸들러 추가
+  const handleAutoConnect = useCallback((newBox: Box) => {
+    if (!isAutoConnectMode || !activeLayer || !file) return;
+
+    const pageData = getPageData(file.name, newBox.pageNumber);
+    if (!pageData) return;
+
+    // 새로 그려진 박스 내부에 있는 기존 박스들을 찾습니다
+    const containedBoxes = pageData.boxes.filter(box => 
+      box.id !== newBox.id &&
+      box.layerId === activeLayer.id &&
+      box.pageNumber === newBox.pageNumber &&
+      box.x >= newBox.x &&
+      box.y >= newBox.y &&
+      (box.x + box.width) <= (newBox.x + newBox.width) &&
+      (box.y + box.height) <= (newBox.y + newBox.height)
+    );
+
+    if (containedBoxes.length === 0) {
+      // 내부 박스가 없는 경우 큰 박스만 제거
+      removeBox(file.name, newBox.id);
       return;
     }
-    
-    console.log('AddBox - 박스 추가:', {
-      boxId: box.id,
-      fileName: file.name,
-      activeLayerId: activeLayer.id,
-      pageNumber: box.pageNumber
-    });
 
-    try {
-      // 전체 박스 데이터에 추가 (useLayerManager의 addBox만 사용)
-      addBox(file.name, box);
-      return box;
-    } catch (error) {
-      console.error('AddBox - Error adding box:', error);
-      return null;
+    // 박스들을 y좌표 기준으로 정렬 (위에서 아래로)
+    const sortedBoxes = containedBoxes.sort((a, b) => a.y - b.y);
+
+    // 현재 페이지의 기존 엣지들
+    const existingEdges = pageEdges[newBox.pageNumber]?.[activeLayer.id] || [];
+    let newEdgesCount = 0;
+
+    // 연결선 생성
+    for (let i = 0; i < sortedBoxes.length - 1; i++) {
+      const startBox = sortedBoxes[i];
+      const endBox = sortedBoxes[i + 1];
+
+      // 중복 엣지 체크
+      const isDuplicate = existingEdges.some(edge => 
+        (edge.startBoxId === startBox.id && edge.endBoxId === endBox.id) ||
+        (edge.startBoxId === endBox.id && edge.endBoxId === startBox.id)
+      );
+
+      if (!isDuplicate) {
+        const newEdge: Edge = {
+          id: `edge_${Date.now()}_${i}`,
+          startBoxId: startBox.id,
+          endBoxId: endBox.id,
+          layerId: activeLayer.id,
+          pageNumber: newBox.pageNumber,
+          type: 'arrow',
+          color: activeLayer.color
+        };
+
+        setPageEdges(prev => ({
+          ...prev,
+          [newBox.pageNumber]: {
+            ...prev[newBox.pageNumber],
+            [activeLayer.id]: [
+              ...(prev[newBox.pageNumber]?.[activeLayer.id] || []),
+              newEdge
+            ]
+          }
+        }));
+        newEdgesCount++;
+      }
     }
-  }, [file, activeLayer, addBox]);
+
+    // 연결선 생성 후 큰 박스 제거
+    removeBox(file.name, newBox.id);
+
+    // 성공 메시지 표시 (새로 생성된 엣지가 있는 경우에만)
+    if (newEdgesCount > 0) {
+      const popup = document.createElement('div');
+      popup.className = 'fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-green-100 border border-green-400 text-green-700 px-6 py-3 rounded shadow-lg z-[9999] flex items-center gap-2';
+      popup.innerHTML = `
+        <svg class="w-5 h-5 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7"></path>
+        </svg>
+        <span class="font-medium">${newEdgesCount}개의 연결선이 자동으로 생성되었습니다</span>
+      `;
+      
+      document.body.appendChild(popup);
+      setTimeout(() => {
+        popup.classList.add('opacity-0', 'transition-opacity', 'duration-300');
+        setTimeout(() => document.body.removeChild(popup), 300);
+      }, 1500);
+    }
+  }, [isAutoConnectMode, activeLayer, file, getPageData, removeBox, pageEdges]);
 
   // 박스 생성 핸들러 추가
   const handleBoxCreated = useCallback((box: DrawingBox) => {
@@ -383,9 +451,39 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
     });
 
     // 박스 추가
-    addBox(file.name, normalizedBox);
-    return normalizedBox;
-  }, [file, activeLayer, scale, pdfDimensions, pageTextContents, addBox, generateBoxId]);
+    const newBox = addBox(file.name, normalizedBox);
+    
+    // 자동 연결 모드가 활성화되어 있다면 자동 연결 실행
+    if (isAutoConnectMode && newBox) {
+      handleAutoConnect(newBox);
+    }
+
+    return newBox;
+  }, [file, activeLayer, scale, pdfDimensions, pageTextContents, addBox, generateBoxId, isAutoConnectMode, handleAutoConnect]);
+
+  // 박스 추가 핸들러 수정
+  const handleAddBox = useCallback((box: Box) => {
+    if (!file || !activeLayer) {
+      console.log('AddBox - Early return:', { hasFile: !!file, hasActiveLayer: !!activeLayer });
+      return;
+    }
+    
+    console.log('AddBox - 박스 추가:', {
+      boxId: box.id,
+      fileName: file.name,
+      activeLayerId: activeLayer.id,
+      pageNumber: box.pageNumber
+    });
+
+    try {
+      // 전체 박스 데이터에 추가 (useLayerManager의 addBox만 사용)
+      addBox(file.name, box);
+      return box;
+    } catch (error) {
+      console.error('AddBox - Error adding box:', error);
+      return null;
+    }
+  }, [file, activeLayer, addBox]);
 
   // 파일 업로드 처리
   const handleFileUpload = async (file: File) => {
@@ -472,7 +570,6 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
   };
 
   // 페이지별 엣지 상태 관리
-  const [pageEdges, setPageEdges] = useState<PageEdges>({});
   const [isDrawingEdge, setIsDrawingEdge] = useState(false);
   const [edgeStartBox, setEdgeStartBox] = useState<Box | null>(null);
   const [tempEndPoint, setTempEndPoint] = useState<Point | null>(null);
@@ -1480,14 +1577,11 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
             selectedBoxIds={selectedBoxIds}
             handleMultipleDelete={handleMultipleDelete}
             isSelectingEdge={isSelectingEdge}
-            setIsSelectingEdge={(selecting) => {
-              setIsSelectingEdge(selecting);
-              if (!selecting) {
-                setSelectedEdgeId(null);
-              }
-            }}
+            setIsSelectingEdge={setIsSelectingEdge}
             selectedEdgeId={selectedEdgeId}
             onEdgeDelete={handleEdgeDeleteWrapper}
+            isAutoConnectMode={isAutoConnectMode}
+            setIsAutoConnectMode={setIsAutoConnectMode}
           />
 
           {/* 박스 편집기 */}
