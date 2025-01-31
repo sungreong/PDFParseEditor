@@ -1,21 +1,7 @@
-export interface Layer {
-  id: string;
-  name: string;
-  visible: boolean;
-  boxes: Box[];
-  color?: string;
-}
+import type { Layer as BaseLayer, Box as BaseBox, GroupBox, Canvas } from '@/types';
 
-export interface Box {
-  id: string;
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-  text?: string;
-  type?: string;
-  layerId: string;
-}
+export type Layer = BaseLayer;
+export type Box = BaseBox;
 
 export interface LayerState {
   layers: Layer[];
@@ -38,4 +24,6 @@ export interface LayerSidebarProps {
 export interface DocumentPageData {
   layers: Layer[];
   boxes: Box[];
+  canvases: Canvas[];
+  groupBoxes: GroupBox[];
 } 

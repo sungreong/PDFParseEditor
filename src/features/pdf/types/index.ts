@@ -1,9 +1,12 @@
+import type { Connection } from '@/features/connection/types';
+
 export interface PDFViewerProps {
   file: File | null;
   onFileChange: (file: File | null) => void;
 }
 
-export interface PDFDocumentProps extends PDFViewerProps {
+export interface PDFDocumentProps {
+  file: File;
   pageNumber: number;
   scale: number;
   isScrollMode: boolean;

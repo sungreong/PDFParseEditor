@@ -5,26 +5,26 @@ interface WindowSize {
   height: number;
 }
 
-const useWindowSize = (): WindowSize => {
+const useWindowSize = () => {
   const [windowSize, setWindowSize] = useState<WindowSize>({
-    width: 0,
-    height: 0,
+    width: typeof window !== 'undefined' ? window.innerWidth : 1200,
+    height: typeof window !== 'undefined' ? window.innerHeight : 800,
   });
 
   useEffect(() => {
-    if (typeof window !== 'undefined') {
-      const handleResize = () => {
-        setWindowSize({
-          width: window.innerWidth,
-          height: window.innerHeight,
-        });
-      };
+    if (typeof window === 'undefined') return;
 
-      window.addEventListener('resize', handleResize);
-      handleResize();
+    const handleResize = () => {
+      setWindowSize({
+        width: window.innerWidth,
+        height: window.innerHeight,
+      });
+    };
 
-      return () => window.removeEventListener('resize', handleResize);
-    }
+    window.addEventListener('resize', handleResize);
+    handleResize();
+
+    return () => window.removeEventListener('resize', handleResize);
   }, []);
 
   return windowSize;

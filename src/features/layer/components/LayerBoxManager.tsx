@@ -1,29 +1,34 @@
 'use client';
 
 import React, { useState, useMemo, useEffect, useCallback } from 'react';
-import type { Layer, Box, GroupBox } from '../types';
-import type { Connection } from '@/features/connection/types';
-import DraggablePopup from './DraggablePopup';
-import ToolManager from './tools/ToolManager';
+import type { Layer, Box, GroupBox, Connection } from '@/types';
+import DraggablePopup from '@/components/DraggablePopup';
 
 interface LayerBoxManagerProps {
   isOpen: boolean;
   onClose: () => void;
   layers: Layer[];
-  activeLayer: Layer;
+  activeLayer: Layer | null;
   selectedBox: Box | null;
   onLayerSelect: (layerId: string) => void;
   onLayerAdd: () => void;
   onLayerDelete: (layerId: string) => void;
   onLayerVisibilityToggle: (layerId: string) => void;
+  onLayerNameChange: (layerId: string, newName: string) => void;
+  onLayerColorChange: (layerId: string, newColor: string) => void;
+  onMoveBoxToLayer: (boxId: string, targetLayerId: string) => void;
+  onDuplicateLayer: (layerId: string) => void;
+  onMergeLayers: (sourceLayerId: string, targetLayerId: string) => void;
+  onExportLayer: (layerId: string) => void;
+  onImportLayer: (layerData: any) => void;
   isDrawMode: boolean;
   onToggleDrawMode: () => void;
   isDrawingArrow: boolean;
   onToggleArrowDrawing: () => void;
   connections: Connection[];
   onConnectionDelete: (connectionId: string) => void;
-  onConnectionAdd: (connection: Connection) => void;
-  layer: Layer;
+  onConnectionAdd: (startBox: Box, endBox: Box) => void;
+  layer: Layer | null;
   documentName: string;
   getPageData: (documentId: string, pageNumber: number) => {
     layers: Layer[];
@@ -37,19 +42,41 @@ interface LayerBoxManagerProps {
   onBoxUpdate: (boxId: string, updates: Partial<Box>) => void;
   onBoxesUpload: (boxes: Box[]) => void;
   setIsBoxDetailOpen: (isOpen: boolean) => void;
-  setOriginalBox: (box: Box | null) => void;
+  setOriginalBox: (box: Box) => void;
   setPageNumber: (pageNumber: number) => void;
   updateGroupBox: (documentId: string, pageNumber: number, groupId: string, updates: Partial<GroupBox>) => void;
   removeGroupBox: (documentId: string, pageNumber: number, groupId: string) => void;
   getGroupBoxes: (documentId: string, pageNumber: number, groupId: string) => Box[];
-  createGroupBox: (documentId: string, pageNumber: number, groupId: string, group: GroupBox) => void;
+  createGroupBox: (documentId: string, pageNumber: number, groupId: string, groupBox: GroupBox) => void;
   selectedBoxes: Box[];
   onBoxesSelect: (boxes: Box[]) => void;
   isMultiSelectMode: boolean;
-  onMultiSelectModeChange: (isMultiSelectMode: boolean) => void;
+  onMultiSelectModeChange: (isMultiSelect: boolean) => void;
+  edges: Connection[];
+  onEdgeAdd: (startBox: Box, endBox: Box) => void;
+  onEdgeDelete: (edgeId: string) => void;
+  onEdgeUpdate: (edgeId: string, updates: Partial<Connection>) => void;
+  scale: number;
+  currentPage: number;
+  pageNumber: number;
+  addBox: (box: Box) => void;
 }
 
-const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
+// 레이어 색상 팔레트 추가
+const layerColors = [
+  '#FF6B6B', // 빨강
+  '#4ECDC4', // 청록
+  '#45B7D1', // 하늘
+  '#96CEB4', // 민트
+  '#FFEEAD', // 노랑
+  '#D4A5A5', // 분홍
+  '#9370DB', // 보라
+  '#20B2AA', // 청록
+  '#FFB6C1', // 연분홍
+  '#98FB98', // 연두
+];
+
+export const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
   layer,
   documentName,
   getPageData,
@@ -67,6 +94,13 @@ const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
   onLayerAdd,
   onLayerDelete,
   onLayerVisibilityToggle,
+  onLayerNameChange,
+  onLayerColorChange,
+  onMoveBoxToLayer,
+  onDuplicateLayer,
+  onMergeLayers,
+  onExportLayer,
+  onImportLayer,
   isDrawMode,
   onToggleDrawMode,
   isDrawingArrow,
@@ -85,6 +119,14 @@ const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
   onBoxesSelect,
   isMultiSelectMode,
   onMultiSelectModeChange,
+  edges,
+  onEdgeAdd,
+  onEdgeDelete,
+  onEdgeUpdate,
+  scale,
+  currentPage,
+  pageNumber,
+  addBox,
 }) => {
   const [selectedBoxId, setSelectedBoxId] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
@@ -98,23 +140,23 @@ const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
     type: 'more' | 'less' | 'none';
     value: number;
   }>({ type: 'none', value: 0 });
+  const [showEdgeTable, setShowEdgeTable] = useState(false);
+  const [selectedEdge, setSelectedEdge] = useState<string | null>(null);
+  const [showGroupTable, setShowGroupTable] = useState(false);
 
   // 연결선 관련 상태 추가
   const [startBox, setStartBox] = useState<Box | null>(null);
-
-  // 그룹 관리 관련 상태 추가
-  const [showGroupTable, setShowGroupTable] = useState(false);
 
   // 모든 페이지의 박스 정보 가져오기
   const allBoxes = useMemo(() => {
     const boxes: Array<Box & { pageNumber: number }> = [];
     for (let page = 1; page <= numPages; page++) {
       const pageData = getPageData(documentName, page);
-      const pageBoxes = pageData?.boxes.filter(box => box.layerId === layer.id) || [];
+      const pageBoxes = pageData?.boxes.filter(box => box.layerId === layer?.id) || [];
       boxes.push(...pageBoxes.map(box => ({ ...box, pageNumber: page })));
     }
     return boxes;
-  }, [documentName, layer.id, numPages, getPageData]);
+  }, [documentName, layer?.id, numPages, getPageData]);
 
   // 페이지별로 박스 그룹화
   const boxesByPage = useMemo(() => {
@@ -162,7 +204,7 @@ const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
       if (!pageData) return null;
 
       // 현재 레이어의 박스만 필터링
-      const boxes = pageData.boxes.filter(box => box.layerId === layer.id);
+      const boxes = pageData.boxes.filter(box => box.layerId === layer?.id);
       
       return {
         pageNumber: pageNum,
@@ -178,9 +220,9 @@ const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
     const jsonData = {
       documentName,
       layer: {
-        id: layer.id,
-        name: layer.name,
-        color: layer.color
+        id: layer?.id,
+        name: layer?.name,
+        color: layer?.color
       },
       pages: allPagesData,
       metadata: {
@@ -197,12 +239,12 @@ const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `${documentName}_${layer.name}_boxes.json`;
+    a.download = `${documentName}_${layer?.name}_boxes.json`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
-  }, [documentName, layer, numPages, getPageData]);
+  }, [documentName, layer?.id, numPages, getPageData]);
 
   // JSON 파일 업로드 처리 함수
   const handleUploadJSON = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
@@ -221,7 +263,7 @@ const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
             if (Array.isArray(page.boxes)) {
               const boxesWithLayerId = page.boxes.map((box: any) => ({
                 ...box,
-                layerId: layer.id  // 현재 레이어 ID로 설정
+                layerId: layer?.id  // 현재 레이어 ID로 설정
               }));
               uploadedBoxes.push(...boxesWithLayerId);
             }
@@ -243,7 +285,7 @@ const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
     
     // 파일 입력 초기화
     event.target.value = '';
-  }, [layer.id, onBoxesUpload]);
+  }, [layer?.id, onBoxesUpload]);
 
   const handleMouseDown = (e: React.MouseEvent) => {
     setIsResizing(true);
@@ -360,20 +402,14 @@ const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
     e.preventDefault();
     e.stopPropagation();
 
-    // 연결 모드일 때는 연결 로직만 실행
     if (isDrawingArrow) {
       if (!startBox) {
         setStartBox(box);
-      } else {
-        if (startBox.id !== box.id) {
-          const newConnection = {
-            id: `connection_${Date.now()}`,
-            start: startBox,
-            end: box
-          };
-          onConnectionDelete(newConnection.id);
-        }
+      } else if (startBox.id !== box.id) {
+        // 연결선 생성
+        onConnectionAdd(startBox, box);
         setStartBox(null);
+        onToggleArrowDrawing();
       }
       return;
     }
@@ -390,7 +426,14 @@ const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
 
   // 박스 생성 핸들러 수정
   const handleBoxCreated = (box: Box) => {
-    // 그룹 선택 관련 로직 제거
+    const newBox: Box = {
+      ...box,
+      layerId: activeLayer?.id || '',
+      pageNumber: currentPage,
+      color: activeLayer?.color || '#000000',
+    };
+
+    addBox(newBox);
   };
 
   // 박스 수정 핸들러 수정
@@ -429,12 +472,16 @@ const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
           startBox?.id === box.id ? 'ring-2 ring-blue-500' : ''} 
         ${isDrawingArrow ? 'cursor-pointer' : ''}
         ${selectedBoxIds.has(box.id) ? 'bg-blue-50' : ''}`}
+        style={{
+          transform: `scale(${scale})`,
+          transformOrigin: 'top left'
+        }}
         onClick={(e) => handleBoxClick(e, box)}
       >
         <div className="flex justify-between items-center mb-1">
           <span className="text-gray-500">
-            위치: ({Math.round(box.x)}, {Math.round(box.y)}) | 
-            크기: {Math.round(box.width)}×{Math.round(box.height)} |
+            위치: ({Math.round(box.x / scale)}, {Math.round(box.y / scale)}) | 
+            크기: {Math.round(box.width / scale)}×{Math.round(box.height / scale)} |
             텍스트: {box.text ? `${box.text.length}자` : '0자'}
           </span>
           <div>
@@ -698,7 +745,7 @@ const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
     const newGroup: GroupBox = {
       id: groupId,
       name: groupName,
-      layerId: layer.id,
+      layerId: layer?.id,
       pageNumber: currentPage,
       color: `#${Math.floor(Math.random()*16777215).toString(16)}`, // 랜덤 색상
       boxIds: selectedBoxesInfo.map(box => box.id),
@@ -808,9 +855,110 @@ const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
     );
   };
 
+  // 필터링된 엣지 목록 계산
+  const filteredEdges = useMemo(() => {
+    if (!edges) return [];
+    
+    return edges.filter(edge => {
+      // 페이지 필터
+      if (selectedPage && edge.startBox.pageNumber !== selectedPage) return false;
+      
+      // 레이어 필터
+      if (edge.layerId !== layer?.id) return false;
+      
+      // 검색어 필터
+      if (searchTerm) {
+        const searchText = `${edge.startBox.text || ''} ${edge.endBox.text || ''}`.toLowerCase();
+        if (!searchText.includes(searchTerm.toLowerCase())) return false;
+      }
+      
+      return true;
+    });
+  }, [edges, selectedPage, layer?.id, searchTerm]);
+
+  // 엣지 테이블 렌더링
+  const renderEdgeTable = () => (
+    <div className="flex flex-col h-full relative">
+      <div className="flex items-center gap-2 p-1 border-b bg-gray-50">
+        <span className="text-sm font-medium">연결선 목록</span>
+        <span className="text-xs text-gray-500">({filteredEdges.length}개)</span>
+        <input
+          type="text"
+          value={searchTerm}
+          onChange={(e) => setSearchTerm(e.target.value)}
+          placeholder="연결선 검색..."
+          className="px-2 py-0.5 border rounded text-xs flex-1 min-w-[100px]"
+        />
+      </div>
+      <div className="flex-1 overflow-auto">
+        <table className="min-w-full text-xs">
+          <thead className="bg-gray-50">
+            <tr>
+              <th className="px-1 py-1 text-left">페이지</th>
+              <th className="px-1 py-1 text-left">시작 박스</th>
+              <th className="px-1 py-1 text-left">끝 박스</th>
+              <th className="px-1 py-1 text-right">작업</th>
+            </tr>
+          </thead>
+          <tbody>
+            {filteredEdges.map(edge => (
+              <tr key={edge.id} className="border-b hover:bg-gray-50">
+                <td className="px-1 py-0.5">{edge.startBox.pageNumber}</td>
+                <td className="px-1 py-0.5">{edge.startBox.text || '(삭제됨)'}</td>
+                <td className="px-1 py-0.5">{edge.endBox.text || '(삭제됨)'}</td>
+                <td className="px-1 py-0.5 text-right">
+                  <button
+                    onClick={() => onEdgeDelete(edge.id)}
+                    className="text-red-500 hover:text-red-700 text-xs"
+                  >
+                    삭제
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+
   // 툴바 렌더링 수정
   const renderToolbar = () => (
     <div className="flex flex-wrap items-center gap-1 sm:gap-2 p-2 border-b shrink-0">
+      <div className="flex items-center gap-2 mr-4">
+        <span className="text-sm font-medium">{documentName}</span>
+        <span className="text-xs text-gray-500">({numPages}페이지)</span>
+      </div>
+      <div className="flex items-center gap-2 mr-4">
+        <button
+          onClick={() => setPageNumber(Math.max(1, pageNumber - 1))}
+          disabled={pageNumber <= 1}
+          className="px-2 py-1 bg-gray-100 rounded text-xs disabled:opacity-50"
+        >
+          ◀
+        </button>
+        <input
+          type="number"
+          min={1}
+          max={numPages}
+          value={pageNumber}
+          onChange={(e) => {
+            const value = parseInt(e.target.value);
+            if (value >= 1 && value <= numPages) {
+              setPageNumber(value);
+            }
+          }}
+          className="w-16 px-2 py-1 border rounded text-center text-xs"
+        />
+        <span className="text-xs text-gray-500">/ {numPages}</span>
+        <button
+          onClick={() => setPageNumber(Math.min(numPages, pageNumber + 1))}
+          disabled={pageNumber >= numPages}
+          className="px-2 py-1 bg-gray-100 rounded text-xs disabled:opacity-50"
+        >
+          ▶
+        </button>
+      </div>
       <select
         value={selectedPage?.toString() || ''}
         onChange={(e) => setSelectedPage(e.target.value ? Number(e.target.value) : null)}
@@ -855,6 +1003,16 @@ const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
         }`}
       >
         {showGroupTable ? '박스 목록' : '그룹 목록'}
+      </button>
+      <button
+        onClick={() => setShowEdgeTable(!showEdgeTable)}
+        className={`px-2 py-0.5 rounded text-xs ${
+          showEdgeTable 
+            ? 'bg-blue-100 text-blue-700' 
+            : 'bg-gray-100 text-gray-700'
+        }`}
+      >
+        {showEdgeTable ? '박스 목록' : '연결선 목록'}
       </button>
     </div>
   );
@@ -926,6 +1084,24 @@ const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
     return <div style={style} />;
   };
 
+  // 레이어 추가 시 색상 할당
+  const handleLayerAdd = () => {
+    const usedColors = new Set(layers.map(layer => layer.color));
+    const availableColors = layerColors.filter(color => !usedColors.has(color));
+    
+    // 모든 색상이 사용중이면 랜덤 색상 생성
+    const newColor = availableColors.length > 0 
+      ? availableColors[0] 
+      : `#${Math.floor(Math.random()*16777215).toString(16)}`;
+    
+    onLayerAdd();
+    // 새 레이어의 색상 업데이트
+    const newLayer = layers[layers.length - 1];
+    if (newLayer) {
+      onLayerColorChange(newLayer.id, newColor);
+    }
+  };
+
   return (
     <DraggablePopup
       isOpen={isOpen}
@@ -935,12 +1111,51 @@ const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
       height="90vh"
     >
       <div className="flex h-full flex-col lg:flex-row">
-        {/* ... 기존 레이어 관리 패널 ... */}
+        {/* 레이어 목록 */}
+        <div className="w-64 border-r p-4">
+          <div className="flex justify-between items-center mb-4">
+            <h3 className="font-medium">레이어</h3>
+            <button
+              onClick={handleLayerAdd}
+              className="px-2 py-1 bg-blue-500 text-white rounded text-sm hover:bg-blue-600"
+            >
+              + 새 레이어
+            </button>
+          </div>
+          {/* 레이어 목록 렌더링 */}
+          <div className="space-y-2">
+            {layers.map(layer => (
+              <div
+                key={layer.id}
+                className={`flex items-center justify-between p-2 rounded ${
+                  activeLayer?.id === layer.id ? 'bg-blue-50' : 'hover:bg-gray-50'
+                }`}
+              >
+                <div className="flex items-center gap-2">
+                  <div
+                    className="w-4 h-4 rounded-full"
+                    style={{ backgroundColor: layer.color }}
+                  />
+                  <span className="text-sm">{layer.name}</span>
+                </div>
+                <button
+                  onClick={() => onLayerColorChange(layer.id, layerColors[Math.floor(Math.random() * layerColors.length)])}
+                  className="text-xs text-gray-500 hover:text-gray-700"
+                >
+                  색상 변경
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+        {/* 기존 컨텐츠 */}
         <div className="flex-1 min-w-0">
           <div className="flex flex-col h-full w-full bg-white">
             {renderToolbar()}
             <div className="flex-1 overflow-auto p-2 sm:p-4">
-              {showGroupTable ? (
+              {showEdgeTable ? (
+                renderEdgeTable()
+              ) : showGroupTable ? (
                 renderGroupTable()
               ) : (
                 showDetails ? renderDetailView() : renderBoxTable()
@@ -952,5 +1167,3 @@ const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
     </DraggablePopup>
   );
 };
-
-export default LayerBoxManager;

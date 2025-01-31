@@ -1,5 +1,15 @@
-import { useState } from 'react';
-import type { PDFState } from '../types';
+import { useState, useCallback } from 'react';
+
+interface PDFState {
+  numPages: number;
+  pageNumber: number;
+  scale: number;
+  isScrollMode: boolean;
+  isTextSelectable: boolean;
+  visiblePages: number[];
+  isSidebarOpen: boolean;
+  isLayerSidebarOpen: boolean;
+}
 
 export const usePDFState = () => {
   const [state, setState] = useState<PDFState>({
@@ -8,19 +18,51 @@ export const usePDFState = () => {
     scale: 1,
     isScrollMode: false,
     isTextSelectable: false,
-    visiblePages: [1],
+    visiblePages: [],
     isSidebarOpen: true,
     isLayerSidebarOpen: false,
   });
 
-  const setNumPages = (numPages: number) => setState(prev => ({ ...prev, numPages }));
-  const setPageNumber = (pageNumber: number) => setState(prev => ({ ...prev, pageNumber }));
-  const setScale = (scale: number) => setState(prev => ({ ...prev, scale }));
-  const setIsScrollMode = (isScrollMode: boolean) => setState(prev => ({ ...prev, isScrollMode }));
-  const setIsTextSelectable = (isTextSelectable: boolean) => setState(prev => ({ ...prev, isTextSelectable }));
-  const setVisiblePages = (visiblePages: number[]) => setState(prev => ({ ...prev, visiblePages }));
-  const setIsSidebarOpen = (isSidebarOpen: boolean) => setState(prev => ({ ...prev, isSidebarOpen }));
-  const setIsLayerSidebarOpen = (isLayerSidebarOpen: boolean) => setState(prev => ({ ...prev, isLayerSidebarOpen }));
+  const setNumPages = useCallback((value: number | ((prev: number) => number)) => {
+    setState(prev => ({
+      ...prev,
+      numPages: typeof value === 'function' ? value(prev.numPages) : value
+    }));
+  }, []);
+
+  const setPageNumber = useCallback((value: number | ((prev: number) => number)) => {
+    setState(prev => ({
+      ...prev,
+      pageNumber: typeof value === 'function' ? value(prev.pageNumber) : value
+    }));
+  }, []);
+
+  const setScale = useCallback((value: number | ((prev: number) => number)) => {
+    setState(prev => ({
+      ...prev,
+      scale: typeof value === 'function' ? value(prev.scale) : value
+    }));
+  }, []);
+
+  const setIsScrollMode = useCallback((value: boolean) => {
+    setState(prev => ({ ...prev, isScrollMode: value }));
+  }, []);
+
+  const setIsTextSelectable = useCallback((value: boolean) => {
+    setState(prev => ({ ...prev, isTextSelectable: value }));
+  }, []);
+
+  const setVisiblePages = useCallback((pages: number[]) => {
+    setState(prev => ({ ...prev, visiblePages: pages }));
+  }, []);
+
+  const setIsSidebarOpen = useCallback((value: boolean) => {
+    setState(prev => ({ ...prev, isSidebarOpen: value }));
+  }, []);
+
+  const setIsLayerSidebarOpen = useCallback((value: boolean) => {
+    setState(prev => ({ ...prev, isLayerSidebarOpen: value }));
+  }, []);
 
   return {
     ...state,

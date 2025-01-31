@@ -3,11 +3,21 @@ export interface Point {
   y: number;
 }
 
+export interface Document {
+  id: string;
+  name: string;
+  createdAt: string;
+  updatedAt: string;
+  pageCount: number;
+  status: 'processing' | 'ready' | 'error';
+}
+
 export interface Layer {
   id: string;
   name: string;
   color: string;
   isVisible: boolean;
+  boxes: Box[];
 }
 
 export interface Box {
@@ -21,6 +31,10 @@ export interface Box {
   type: string;
   color?: string;
   text?: string;
+  metadata?: {
+    createdAt: string;
+    updatedAt: string;
+  };
 }
 
 export interface Canvas {
@@ -39,6 +53,7 @@ export interface PageData {
   layers: Layer[];
   boxes: Box[];
   canvases: Canvas[];
+  groupBoxes: GroupBox[];
 }
 
 export interface GroupBox {
@@ -55,4 +70,11 @@ export interface GroupBox {
     height: number;
   };
   createdAt: number;
+}
+
+export interface DocumentPageData {
+  layers: Layer[];
+  boxes: Box[];
+  canvases: Canvas[];
+  groupBoxes: GroupBox[];
 } 

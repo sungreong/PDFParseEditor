@@ -1,36 +1,86 @@
 'use client';
 
-import React from 'react';
+import React, { useMemo, useState, useCallback, useEffect, useRef } from 'react';
 import dynamic from 'next/dynamic';
+import { Document, Page, pdfjs } from 'react-pdf';
 import { useLayerManager } from '@/features/layer/hooks/useLayerManager';
 import { usePDFState } from '../hooks/usePDFState';
 import { useToolState } from '../hooks/useToolState';
 import { usePDFUpload } from '../hooks/usePDFUpload';
+import { useDocumentManager } from '@/features/document/hooks/useDocumentManager';
 import type { PDFViewerProps } from '../types';
+import type { Layer, Box, GroupBox, Connection, Point, Document as DocumentType } from '@/types';
+import { useConnection } from '@/features/connection/contexts/ConnectionContext';
+import { LayerBoxManager } from '@/features/layer/components/LayerBoxManager';
+import useWindowSize from '@/hooks/useWindowSize';
+import 'react-pdf/dist/esm/Page/TextLayer.css';
+import 'react-pdf/dist/esm/Page/AnnotationLayer.css';
 
-// 클라이언트 사이드에서만 렌더링되도록 동적 임포트
-const PDFDocument = dynamic(() => import('./PDFDocument'), {
-  ssr: false,
-  loading: () => (
-    <div className="w-full h-[500px] flex items-center justify-center">
-      <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900"></div>
-    </div>
-  )
-});
+// PDF.js 워커 설정
+pdfjs.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjs.version}/pdf.worker.js`;
 
 const PDFDropzone = dynamic(() => import('./PDFDropzone'), {
   ssr: false
 });
 
-const DocumentSidebar = dynamic(() => import('./sidebar/DocumentSidebar'), {
-  ssr: false
-});
+interface DrawingBox {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  pageNumber: number;
+}
 
-const LayerSidebar = dynamic(() => import('./sidebar/LayerSidebar'), {
-  ssr: false
-});
+interface LayerBoxManagerProps {
+  isOpen: boolean;
+  onClose: () => void;
+  layers: Layer[];
+  activeLayer: Layer;
+  selectedBox: Box | null;
+  onLayerSelect: (layerId: string) => void;
+  onLayerAdd: () => void;
+  onLayerDelete: (layerId: string) => void;
+  onLayerVisibilityToggle: (layerId: string) => void;
+  onLayerNameChange: (layerId: string, name: string) => void;
+  onLayerColorChange: (layerId: string, color: string) => void;
+  onMoveBoxToLayer: (boxId: string, fromLayerId: string, toLayerId: string) => void;
+  onDuplicateLayer: (layerId: string) => void;
+  onMergeLayers: (sourceLayerId: string, targetLayerId: string) => void;
+  onExportLayer: (layerId: string) => void;
+  onImportLayer: (file: File) => void;
+  isDrawMode: boolean;
+  onToggleDrawMode: () => void;
+  isDrawingArrow: boolean;
+  onToggleArrowDrawing: () => void;
+  connections: Connection[];
+  removeBox: (boxId: string) => void;
+  updateBox: (boxId: string, updates: Partial<Box>) => void;
+}
 
-const PDFViewer: React.FC<PDFViewerProps> = ({ file, onFileChange }) => {
+const PDFViewer: React.FC<PDFViewerProps> = ({ 
+  file, 
+  onFileChange
+}) => {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const windowSize = useWindowSize();
+  const { selectedConnection, setSelectedConnection, addConnection, updateConnection, deleteConnection } = useConnection();
+  const [startBox, setStartBox] = useState<Box | null>(null);
+  const [isDrawingArrow, setIsDrawingArrow] = useState(false);
+  const [isBoxDetailOpen, setIsBoxDetailOpen] = useState(false);
+  const [originalBox, setOriginalBox] = useState<Box | null>(null);
+  const [pageRefs, setPageRefs] = useState<{ [key: number]: HTMLDivElement | null }>({});
+
+  // 문서 관리
+  const {
+    documents,
+    currentDocument,
+    setCurrentDocument,
+    addDocument,
+    updateDocument,
+    deleteDocument,
+    getDocumentById,
+  } = useDocumentManager();
+
   // PDF 상태 관리
   const {
     numPages,
@@ -72,74 +122,816 @@ const PDFViewer: React.FC<PDFViewerProps> = ({ file, onFileChange }) => {
     updateBox,
     getPageData,
     redrawAllCanvases,
+    setCanvasRef,
+    updateLayerName,
+    updateLayerColor,
+    moveBoxToLayer,
+    duplicateLayer,
+    mergeLayer,
+    clearLayer,
+    exportLayer,
+    importLayer,
   } = useLayerManager();
 
   // PDF 업로드 관리
   const { uploadPDF, isUploading, uploadError } = usePDFUpload();
 
+  // 모든 박스 정보 가져오기
+  const allBoxes = useMemo(() => {
+    if (!file || !activeLayer) return [];
+    
+    const pageData = getPageData(file.name, pageNumber);
+    if (!pageData) return [];
+
+    return pageData.boxes.filter(box => 
+      box.pageNumber === pageNumber && 
+      box.layerId === activeLayer.id
+    );
+  }, [file, pageNumber, activeLayer, getPageData]);
+
+  // PDF 크기 계산
+  const pdfDimensions = useMemo(() => {
+    const maxWidth = Math.min(windowSize.width * 0.8, 1200);
+    const baseWidth = maxWidth;
+    const baseHeight = baseWidth * 1.414; // A4 비율
+
+    return {
+      width: baseWidth,
+      height: baseHeight,
+      baseWidth,
+      baseHeight,
+      scaledWidth: baseWidth * scale,
+      scaledHeight: baseHeight * scale
+    };
+  }, [windowSize.width, scale]);
+
+  // 박스 그리기 관련 상태 추가
+  const [startPoint, setStartPoint] = useState<Point | null>(null);
+  const [currentBox, setCurrentBox] = useState<DrawingBox | null>(null);
+
+  // boxesByPage Map을 관리하는 로직 추가
+  const [boxesByPage] = useState(() => new Map<number, Box[]>());
+
+  // 페이지별 박스 데이터 관리 함수
+  const updateBoxesByPage = useCallback((box: Box, action: 'add' | 'remove' | 'update') => {
+    if (!file) return;
+
+    boxesByPage.set(box.pageNumber, 
+      action === 'remove' 
+        ? (boxesByPage.get(box.pageNumber) || []).filter(b => b.id !== box.id)
+        : action === 'update'
+          ? (boxesByPage.get(box.pageNumber) || []).map(b => b.id === box.id ? box : b)
+          : [...(boxesByPage.get(box.pageNumber) || []), box]
+    );
+  }, [file, boxesByPage]);
+
   // 파일 업로드 처리
   const handleFileUpload = async (file: File) => {
     try {
-      const pdfInfo = await uploadPDF(file);
-      if (pdfInfo) {
         onFileChange(file);
-        setNumPages(pdfInfo.page_count);
         setPageNumber(1);
         
         if (file) {
+        // 새 문서 추가
+        const newDocument: DocumentType = {
+          id: `doc_${Date.now()}`,
+          name: file.name,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          pageCount: 0,
+          status: 'processing',
+        };
+        
+        addDocument(newDocument);
+        setCurrentDocument(newDocument);
           initializeDocumentPage(file.name, 1);
-        }
       }
     } catch (error) {
       console.error('파일 업로드 실패:', error);
     }
   };
 
+  // 페이지 ref 설정
+  const setPageRef = useCallback((pageNum: number, ref: HTMLDivElement | null) => {
+    if (pageRefs[pageNum] !== ref) {
+      setPageRefs(prev => ({
+        ...prev,
+        [pageNum]: ref
+      }));
+    }
+  }, [pageRefs]);
+
+  // 박스 중앙 좌표 계산
+  const getBoxCenter = (box: Box): Point => {
+    return {
+      x: box.x + box.width / 2,
+      y: box.y + box.height / 2
+    };
+  };
+
+  // 연결선 렌더링 컴포넌트
+  const ConnectionLines = () => {
+    if (!activeLayer || !selectedConnection) return null;
+
+    const startBox = selectedConnection.startBox;
+    const endBox = selectedConnection.endBox;
+
+    if (!startBox || !endBox) return null;
+
+    return (
+      <svg 
+        className="absolute inset-0 pointer-events-none" 
+        style={{ 
+          width: pdfDimensions.width,
+          height: pdfDimensions.height,
+          transform: `scale(${scale})`,
+          transformOrigin: 'top left',
+          zIndex: 2 
+        }}
+      >
+        <defs>
+          <marker
+            id="arrowhead"
+            markerWidth="10"
+            markerHeight="7"
+            refX="9"
+            refY="3.5"
+            orient="auto"
+          >
+            <polygon
+              points="0 0, 10 3.5, 0 7"
+              fill={activeLayer.color}
+            />
+          </marker>
+        </defs>
+        <g key={selectedConnection.id}>
+          <line
+            x1={getBoxCenter(startBox).x}
+            y1={getBoxCenter(startBox).y}
+            x2={getBoxCenter(endBox).x}
+            y2={getBoxCenter(endBox).y}
+            stroke={activeLayer.color}
+            strokeWidth="2"
+            markerEnd="url(#arrowhead)"
+            style={{ pointerEvents: 'none' }}
+          />
+        </g>
+      </svg>
+    );
+  };
+
+  // 페이지 렌더링
+  const renderPage = (pageNum: number) => {
+    const pageData = file ? getPageData(file.name, pageNum) : null;
+    
+    return (
+      <div
+        key={pageNum}
+        ref={(ref) => setPageRef(pageNum, ref)}
+        className="pdf-page-container relative"
+        data-page={pageNum}
+        onMouseDown={(e) => handleCanvasMouseDown(e, pageNum)}
+        onMouseMove={(e) => handleCanvasMouseMove(e, pageNum)}
+        onMouseUp={(e) => handleCanvasMouseUp(e, pageNum)}
+        style={{
+          width: `${pdfDimensions.scaledWidth}px`,
+          height: `${pdfDimensions.scaledHeight}px`
+        }}
+      >
+        <div className="relative">
+          <Page
+            pageNumber={pageNum}
+            width={pdfDimensions.width}
+            height={pdfDimensions.height}
+            renderTextLayer={isTextSelectable}
+            renderAnnotationLayer={false}
+            scale={scale}
+          />
+          {/* 현재 그리고 있는 박스 미리보기 */}
+          {currentBox && toolState.isDrawMode && pageNum === currentBox.pageNumber && (
+            <div
+              className="absolute border-2 border-dashed pointer-events-none"
+              style={{
+                left: `${currentBox.x * scale}px`,
+                top: `${currentBox.y * scale}px`,
+                width: `${Math.abs(currentBox.width) * scale}px`,
+                height: `${Math.abs(currentBox.height) * scale}px`,
+                borderColor: activeLayer?.color || '#000',
+                backgroundColor: `${activeLayer?.color}20` || '#00000020'
+              }}
+            />
+          )}
+          {pageData?.boxes
+            .filter(box => box.pageNumber === pageNum)
+            .map(box => {
+              const layer = layers.find(l => l.id === box.layerId);
+              if (!layer?.isVisible) return null;
+              
+              return (
+                <div
+                  key={box.id}
+                  className={`absolute border-2 ${selectedBox?.id === box.id ? 'ring-2 ring-blue-500' : ''}`}
+                  style={{
+                    left: `${box.x * scale}px`,
+                    top: `${box.y * scale}px`,
+                    width: `${box.width * scale}px`,
+                    height: `${box.height * scale}px`,
+                    borderColor: box.color || layer.color,
+                    backgroundColor: `${box.color || layer.color}20`,
+                    cursor: isDrawingArrow ? 'crosshair' : 'pointer'
+                  }}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (isDrawingArrow) {
+                      if (!startBox) {
+                        setStartBox(box);
+                      } else if (box.pageNumber === startBox.pageNumber) {
+                        addConnection(startBox, box);
+                        setStartBox(null);
+                        setIsDrawingArrow(false);
+                      }
+                    } else {
+                      setSelectedBox(box);
+                      setIsBoxDetailOpen(true);
+                    }
+                  }}
+                />
+              );
+            })}
+        </div>
+      </div>
+    );
+  };
+
+  // 박스 그리기 핸들러 수정
+  const handleCanvasMouseDown = useCallback((e: React.MouseEvent<HTMLDivElement>, pageNum: number) => {
+    if (!toolState.isDrawMode || !activeLayer) return;
+    
+    const rect = e.currentTarget.getBoundingClientRect();
+    const pdfContainer = e.currentTarget.querySelector('.react-pdf__Page') as HTMLElement;
+    if (!pdfContainer) return;
+
+    const pdfRect = pdfContainer.getBoundingClientRect();
+    const x = (e.clientX - pdfRect.left) / scale;
+    const y = (e.clientY - pdfRect.top) / scale;
+    
+    setStartPoint({ x, y });
+    setCurrentBox({
+      x,
+      y,
+      width: 0,
+      height: 0,
+      pageNumber: pageNum
+    });
+  }, [toolState.isDrawMode, activeLayer, scale]);
+
+  const handleCanvasMouseMove = useCallback((e: React.MouseEvent<HTMLDivElement>, pageNum: number) => {
+    if (!toolState.isDrawMode || !startPoint || !currentBox || !activeLayer) return;
+    
+    const rect = e.currentTarget.getBoundingClientRect();
+    const pdfContainer = e.currentTarget.querySelector('.react-pdf__Page') as HTMLElement;
+    if (!pdfContainer) return;
+
+    const pdfRect = pdfContainer.getBoundingClientRect();
+    const x = (e.clientX - pdfRect.left) / scale;
+    const y = (e.clientY - pdfRect.top) / scale;
+    
+    setCurrentBox(prev => {
+      if (!prev || !startPoint) return prev;
+      
+      const width = x - startPoint.x;
+      const height = y - startPoint.y;
+      
+      return {
+        ...prev,
+        width,
+        height
+      };
+    });
+  }, [toolState.isDrawMode, startPoint, currentBox, activeLayer, scale]);
+
+  // 박스 추가 핸들러 수정
+  const handleAddBox = useCallback((box: Box) => {
+    if (!file || !activeLayer) return;
+    
+    // 현재 페이지의 데이터만 가져오기
+    const pageData = getPageData(file.name, box.pageNumber);
+    if (!pageData) {
+      initializeDocumentPage(file.name, box.pageNumber);
+    }
+
+    // 현재 페이지의 박스 목록에만 추가
+    updateBoxesByPage(box, 'add');
+    addBox(box);
+    redrawAllCanvases();
+  }, [file, activeLayer, updateBoxesByPage, addBox, redrawAllCanvases, initializeDocumentPage, getPageData]);
+
+  const handleCanvasMouseUp = useCallback((e: React.MouseEvent<HTMLDivElement>, pageNum: number) => {
+    if (!toolState.isDrawMode || !startPoint || !currentBox || !activeLayer || !file) return;
+    
+    const rect = e.currentTarget.getBoundingClientRect();
+    const pdfContainer = e.currentTarget.querySelector('.react-pdf__Page') as HTMLElement;
+    if (!pdfContainer) return;
+
+    const pdfRect = pdfContainer.getBoundingClientRect();
+    const x = (e.clientX - pdfRect.left) / scale;
+    const y = (e.clientY - pdfRect.top) / scale;
+    
+    const width = Math.abs(x - startPoint.x);
+    const height = Math.abs(y - startPoint.y);
+    
+    // 최소 크기 체크 (10px)
+    const minSize = 10 / scale;  // scale에 따른 최소 크기 조정
+    if (width > minSize && height > minSize) {
+      const newBox: Box = {
+        id: `box_${Date.now()}`,
+        x: Math.min(startPoint.x, x),
+        y: Math.min(startPoint.y, y),
+        width,
+        height,
+        pageNumber: pageNum,
+        layerId: activeLayer.id,
+        type: 'box',
+        color: activeLayer.color,
+        text: ''
+      };
+      handleAddBox(newBox);
+    }
+
+    setStartPoint(null);
+    setCurrentBox(null);
+  }, [toolState.isDrawMode, startPoint, currentBox, activeLayer, file, handleAddBox, scale]);
+
+  // 박스 삭제 핸들러 수정
+  const handleRemoveBox = useCallback((boxId: string) => {
+    if (!file || !selectedBox) return;
+    
+    const pageNum = selectedBox.pageNumber;
+    const box = boxesByPage.get(pageNum)?.find(b => b.id === boxId);
+    if (box) {
+      updateBoxesByPage(box, 'remove');
+      removeBox(boxId);
+      redrawAllCanvases();
+    }
+  }, [file, selectedBox, boxesByPage, updateBoxesByPage, removeBox, redrawAllCanvases]);
+
+  // 박스 업데이트 핸들러 수정
+  const handleUpdateBox = useCallback((boxId: string, updates: Partial<Box>) => {
+    if (!file || !selectedBox) return;
+    
+    const pageNum = selectedBox.pageNumber;
+    const box = boxesByPage.get(pageNum)?.find(b => b.id === boxId);
+    if (box) {
+      const updatedBox = { ...box, ...updates };
+      updateBoxesByPage(updatedBox, 'update');
+      updateBox(boxId, updates);
+      redrawAllCanvases();
+    }
+  }, [file, selectedBox, boxesByPage, updateBoxesByPage, updateBox, redrawAllCanvases]);
+
+  // 페이지 이동 핸들러
+  const handlePageChange = useCallback((newPage: number) => {
+    if (newPage < 1 || newPage > numPages) return;
+    setPageNumber(newPage);
+    if (file) {
+      const pageData = getPageData(file.name, newPage);
+      if (!pageData) {
+        initializeDocumentPage(file.name, newPage);
+      }
+    }
+  }, [file, numPages, initializeDocumentPage, getPageData]);
+
+  // 스크롤 모드에서 보이는 페이지 업데이트
+  useEffect(() => {
+    if (!isScrollMode || !containerRef.current) return;
+
+    const container = containerRef.current;
+    const handleScroll = () => {
+      if (!container) return;
+
+      const { scrollTop, clientHeight } = container;
+      const pageElements = container.querySelectorAll('.pdf-page-container');
+      const newVisiblePages: number[] = [];
+
+      pageElements.forEach((element: Element) => {
+        const rect = element.getBoundingClientRect();
+        const pageNum = parseInt(element.getAttribute('data-page') || '1');
+        
+        if (rect.top < clientHeight && rect.bottom > 0) {
+          newVisiblePages.push(pageNum);
+        }
+      });
+
+      if (newVisiblePages.length > 0) {
+        setVisiblePages(newVisiblePages);
+        setPageNumber(newVisiblePages[0]);
+      }
+    };
+
+    container.addEventListener('scroll', handleScroll);
+    handleScroll();
+
+    return () => {
+      container.removeEventListener('scroll', handleScroll);
+    };
+  }, [isScrollMode, setVisiblePages]);
+
   return (
-    <div className="flex flex-col items-center p-4 min-h-screen">
-      <PDFDropzone onFileUpload={handleFileUpload} />
+    <div className="flex flex-col items-center p-4 min-h-screen" ref={containerRef}>
+      {!file && <PDFDropzone onFileUpload={handleFileUpload} />}
 
       {file && (
-        <div className="relative w-full">
-          <PDFDocument
-            file={file}
-            pageNumber={pageNumber}
-            scale={scale}
-            isScrollMode={isScrollMode}
-            isTextSelectable={isTextSelectable}
-            visiblePages={visiblePages}
-            toolState={toolState}
-            toolActions={toolActions}
-            onBoxSelect={handleBoxSelect}
-            onLoadSuccess={({ numPages }) => setNumPages(numPages)}
-          />
+        <>
+          <div className="flex flex-row w-full h-full">
+            {/* 왼쪽 레이어 관리 사이드바 */}
+            <div className={`fixed left-0 top-0 h-full bg-white shadow-lg transition-all duration-300 z-50 ${isLayerSidebarOpen ? 'w-80' : 'w-0'}`}>
+              <div className="flex flex-col h-full">
+                <div className="p-4 border-b flex justify-between items-center">
+                  <h2 className="text-lg font-semibold">레이어 관리</h2>
+                  <button
+                    onClick={() => setIsLayerSidebarOpen(false)}
+                    className="p-2 hover:bg-gray-100 rounded"
+                  >
+                    ✕
+                  </button>
+                </div>
+                
+                {/* 레이어 목록 */}
+                <div className="flex-1 overflow-y-auto p-4">
+                  <div className="space-y-4">
+                    <button
+                      onClick={() => addLayer('새 레이어')}
+                      className="w-full px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600"
+                    >
+                      + 새 레이어
+                    </button>
+                    
+                    {layers.map(layer => (
+                      <div
+                        key={layer.id}
+                        className={`p-3 rounded border ${
+                          activeLayer?.id === layer.id ? 'border-blue-500 bg-blue-50' : 'border-gray-200'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between mb-2">
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="checkbox"
+                              checked={layer.isVisible}
+                              onChange={() => toggleLayerVisibility(layer.id)}
+                              className="w-4 h-4"
+                            />
+                            <div
+                              className="w-4 h-4 rounded-full"
+                              style={{ backgroundColor: layer.color }}
+                            />
+                            <span>{layer.name}</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <button
+                              onClick={() => {
+                                setActiveLayer(layer);
+                                setIsBoxDetailOpen(true);
+                              }}
+                              className="text-blue-500 hover:text-blue-700"
+                            >
+                              관리
+                            </button>
+                            <button
+                              onClick={() => removeLayer(layer.id)}
+                              className="text-red-500 hover:text-red-700"
+                            >
+                              삭제
+                            </button>
+                          </div>
+                        </div>
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => setActiveLayer(layer)}
+                            className={`flex-1 px-2 py-1 rounded text-sm ${
+                              activeLayer?.id === layer.id
+                                ? 'bg-blue-500 text-white'
+                                : 'bg-gray-100 hover:bg-gray-200'
+                            }`}
+                          >
+                            선택
+                          </button>
+                          <button
+                            onClick={() => duplicateLayer(layer.id)}
+                            className="flex-1 px-2 py-1 rounded text-sm bg-gray-100 hover:bg-gray-200"
+                          >
+                            복제
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
 
-          <LayerSidebar
-            isOpen={isLayerSidebarOpen}
-            onClose={() => setIsLayerSidebarOpen(false)}
-            layers={layers}
-            activeLayer={activeLayer}
-            onLayerAdd={addLayer}
-            onLayerDelete={removeLayer}
-            onLayerVisibilityToggle={toggleLayerVisibility}
-            onLayerSelect={setActiveLayer}
-          />
+            {/* 메인 콘텐츠 */}
+            <div className={`flex-1 transition-all duration-300 ${isLayerSidebarOpen ? 'ml-80' : 'ml-0'} ${isSidebarOpen ? 'mr-80' : 'mr-0'}`}>
+              {/* 상단 툴바 */}
+              <div className="sticky top-0 z-10 bg-white shadow-sm mb-4">
+                <div className="flex items-center justify-between p-4">
+                  <button
+                    onClick={() => setIsLayerSidebarOpen(!isLayerSidebarOpen)}
+                    className="p-2 hover:bg-gray-100 rounded"
+                  >
+                    {isLayerSidebarOpen ? '◀' : '▶'}
+                  </button>
+                  <div className="flex items-center space-x-4">
+                    <button
+                      onClick={() => handlePageChange(pageNumber - 1)}
+                      disabled={pageNumber <= 1}
+                      className="px-4 py-2 bg-gray-100 rounded disabled:opacity-50"
+                    >
+                      이전
+                    </button>
+                    <span>
+                      {pageNumber} / {numPages}
+                    </span>
+                    <button
+                      onClick={() => handlePageChange(pageNumber + 1)}
+                      disabled={pageNumber >= numPages}
+                      className="px-4 py-2 bg-gray-100 rounded disabled:opacity-50"
+                    >
+                      다음
+                    </button>
+                  </div>
+                  <button
+                    onClick={() => setIsSidebarOpen(!isSidebarOpen)}
+                    className="p-2 hover:bg-gray-100 rounded"
+                  >
+                    {isSidebarOpen ? '▶' : '◀'}
+                  </button>
+                </div>
+              </div>
 
-          <DocumentSidebar
-            isOpen={isSidebarOpen}
-            onClose={() => setIsSidebarOpen(false)}
-            file={file}
-            numPages={numPages}
-            pageNumber={pageNumber}
-            scale={scale}
-            isScrollMode={isScrollMode}
-            isTextSelectable={isTextSelectable}
-            onPageChange={setPageNumber}
-            onScaleModeChange={setScale}
-            onScrollModeChange={setIsScrollMode}
-            onTextSelectableChange={setIsTextSelectable}
-          />
-        </div>
+              {/* PDF 뷰어 */}
+              <Document
+                file={file}
+                  onLoadSuccess={({ numPages }) => {
+                    setNumPages(numPages);
+                    if (currentDocument) {
+                      updateDocument(currentDocument.id, {
+                        ...currentDocument,
+                        pageCount: numPages,
+                        status: 'ready'
+                      });
+                    }
+                  }}
+                className="mx-auto"
+              >
+                  {isScrollMode ? (
+                    visiblePages.map(renderPage)
+                  ) : (
+                    renderPage(pageNumber)
+                  )}
+                </Document>
+            </div>
+
+            {/* 오른쪽 문서 정보 사이드바 */}
+            <div className={`fixed right-0 top-0 h-full bg-white shadow-lg transition-all duration-300 z-50 ${isSidebarOpen ? 'w-80' : 'w-0'}`}>
+              <div className="flex flex-col h-full">
+                <div className="p-4 border-b flex justify-between items-center">
+                  <h2 className="text-lg font-semibold">문서 정보</h2>
+                  <button
+                    onClick={() => setIsSidebarOpen(false)}
+                    className="p-2 hover:bg-gray-100 rounded"
+                  >
+                    ✕
+                  </button>
+                </div>
+                
+                <div className="flex-1 overflow-y-auto p-4">
+                  {/* 문서 정보 */}
+                  <div className="space-y-4">
+                    <div className="bg-gray-50 p-3 rounded">
+                      <h3 className="font-medium mb-2">기본 정보</h3>
+                      <div className="space-y-1 text-sm">
+                        <p><span className="font-medium">파일명:</span> {file.name}</p>
+                        <div className="flex items-center gap-2 mt-2">
+                          <span className="font-medium">페이지:</span>
+                          <div className="flex items-center gap-1">
+                            <button
+                              onClick={() => handlePageChange(pageNumber - 1)}
+                              disabled={pageNumber <= 1}
+                              className="px-2 py-1 bg-gray-100 rounded text-xs disabled:opacity-50"
+                            >
+                              ◀
+                            </button>
+                            <input
+                              type="number"
+                              min={1}
+                              max={numPages}
+                              value={pageNumber}
+                              onChange={(e) => {
+                                const value = parseInt(e.target.value);
+                                if (value >= 1 && value <= numPages) {
+                                  handlePageChange(value);
+                                }
+                              }}
+                              className="w-16 px-2 py-1 border rounded text-center text-xs"
+                            />
+                            <span className="text-xs">/ {numPages}</span>
+                            <button
+                              onClick={() => handlePageChange(pageNumber + 1)}
+                              disabled={pageNumber >= numPages}
+                              className="px-2 py-1 bg-gray-100 rounded text-xs disabled:opacity-50"
+                            >
+                              ▶
+                            </button>
+                          </div>
+                        </div>
+                        <p><span className="font-medium">생성일:</span> {currentDocument?.createdAt ? new Date(currentDocument.createdAt).toLocaleString() : '-'}</p>
+                        <p><span className="font-medium">수정일:</span> {currentDocument?.updatedAt ? new Date(currentDocument.updatedAt).toLocaleString() : '-'}</p>
+                      </div>
+                    </div>
+
+                    {/* 보기 설정 */}
+                    <div className="bg-white p-3 rounded border">
+                      <h3 className="font-medium mb-2">보기 설정</h3>
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between">
+                          <span className="text-sm">확대/축소</span>
+                          <div className="flex items-center gap-2">
+                            <button
+                              onClick={() => setScale(prev => Math.max(0.5, prev - 0.1))}
+                              className="px-2 py-1 bg-gray-100 rounded"
+                            >
+                              -
+                            </button>
+                            <span className="text-sm">{Math.round(scale * 100)}%</span>
+                            <button
+                              onClick={() => setScale(prev => Math.min(2, prev + 0.1))}
+                              className="px-2 py-1 bg-gray-100 rounded"
+                            >
+                              +
+                            </button>
+                          </div>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-sm">스크롤 모드</span>
+                          <button
+                            onClick={() => setIsScrollMode(!isScrollMode)}
+                            className={`px-3 py-1 rounded text-sm ${
+                              isScrollMode ? 'bg-blue-500 text-white' : 'bg-gray-100'
+                            }`}
+                          >
+                            {isScrollMode ? '켜짐' : '꺼짐'}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* 현재 페이지 박스 정보 */}
+                    <div className="bg-white p-3 rounded border mt-4">
+                      <h3 className="font-medium mb-2">현재 페이지 박스 정보</h3>
+                      <div className="space-y-2">
+                        {file && getPageData(file.name, pageNumber)?.boxes
+                          .filter(box => box.pageNumber === pageNumber)
+                          .map((box: Box) => (
+                          <div key={box.id} className="text-sm p-2 bg-gray-50 rounded">
+                            <div className="flex justify-between items-center">
+                              <span className="text-gray-600">
+                                {box.text ? `${box.text.substring(0, 20)}${box.text.length > 20 ? '...' : ''}` : '(텍스트 없음)'}
+                              </span>
+                              <div className="flex gap-1">
+                                <button
+                                  onClick={() => setSelectedBox(box)}
+                                  className="text-blue-500 hover:text-blue-700 text-xs"
+                                >
+                                  보기
+                                </button>
+                                <button
+                                  onClick={() => handleRemoveBox(box.id)}
+                                  className="text-red-500 hover:text-red-700 text-xs"
+                                >
+                                  삭제
+                                </button>
+                              </div>
+                            </div>
+                            <div className="text-xs text-gray-500 mt-1">
+                              크기: {Math.round(box.width / scale)}×{Math.round(box.height / scale)}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* LayerBoxManager */}
+            {isBoxDetailOpen && activeLayer && (
+              <LayerBoxManager
+                isOpen={isBoxDetailOpen}
+                onClose={() => setIsBoxDetailOpen(false)}
+                layers={layers}
+                activeLayer={activeLayer}
+                selectedBox={selectedBox}
+                onLayerSelect={(layerId) => {
+                  const layer = layers.find(l => l.id === layerId);
+                  if (layer) setActiveLayer(layer);
+                }}
+                onLayerAdd={() => addLayer('새 레이어')}
+                onLayerDelete={removeLayer}
+                onLayerVisibilityToggle={toggleLayerVisibility}
+                onLayerNameChange={updateLayerName}
+                onLayerColorChange={updateLayerColor}
+                onMoveBoxToLayer={moveBoxToLayer}
+                onDuplicateLayer={duplicateLayer}
+                onMergeLayers={mergeLayer}
+                onExportLayer={exportLayer}
+                onImportLayer={importLayer}
+                isDrawMode={toolState.isDrawMode}
+                onToggleDrawMode={toolActions.onToggleDrawMode}
+                isDrawingArrow={isDrawingArrow}
+                onToggleArrowDrawing={() => setIsDrawingArrow(!isDrawingArrow)}
+                connections={[]}
+                onConnectionDelete={deleteConnection}
+                onConnectionAdd={addConnection}
+                layer={activeLayer}
+                documentName={file.name}
+                getPageData={getPageData}
+                numPages={numPages}
+                onBoxSelect={setSelectedBox}
+                onBoxDelete={handleRemoveBox}
+                onBoxUpdate={handleUpdateBox}
+                onBoxesUpload={() => {}}
+                setIsBoxDetailOpen={setIsBoxDetailOpen}
+                setOriginalBox={setOriginalBox}
+                setPageNumber={setPageNumber}
+                updateGroupBox={() => {}}
+                removeGroupBox={() => {}}
+                getGroupBoxes={() => []}
+                createGroupBox={() => {}}
+                selectedBoxes={[]}
+                onBoxesSelect={() => {}}
+                isMultiSelectMode={toolState.isMultiSelectMode}
+                onMultiSelectModeChange={toolActions.onToggleMultiSelect}
+                edges={[]}
+                onEdgeAdd={addConnection}
+                onEdgeDelete={deleteConnection}
+                onEdgeUpdate={updateConnection}
+                scale={scale}
+                currentPage={pageNumber}
+                addBox={handleAddBox}
+                removeBox={handleRemoveBox}
+                updateBox={handleUpdateBox}
+              />
+            )}
+          </div>
+
+          {/* 도구 모음 - 메인 콘텐츠 밖으로 이동 */}
+          <div className="fixed bottom-4 left-1/2 transform -translate-x-1/2 bg-white rounded-lg shadow-lg p-2 flex gap-2 z-[60]">
+            <div className="flex items-center gap-2">
+              <button
+                onClick={toolActions.onToggleDrawMode}
+                className={`px-4 py-2 rounded ${toolState.isDrawMode ? 'bg-blue-500 text-white' : 'bg-gray-100'}`}
+              >
+                박스 그리기
+              </button>
+              <button
+                onClick={() => setIsDrawingArrow(!isDrawingArrow)}
+                className={`px-4 py-2 rounded ${isDrawingArrow ? 'bg-blue-500 text-white' : 'bg-gray-100'}`}
+              >
+                연결선 그리기
+              </button>
+              <button
+                onClick={toolActions.onToggleMultiSelect}
+                className={`px-4 py-2 rounded ${toolState.isMultiSelectMode ? 'bg-blue-500 text-white' : 'bg-gray-100'}`}
+              >
+                다중 선택
+              </button>
+              <button
+                onClick={() => setIsTextSelectable(!isTextSelectable)}
+                className={`px-4 py-2 rounded ${isTextSelectable ? 'bg-blue-500 text-white' : 'bg-gray-100'}`}
+              >
+                텍스트 선택
+              </button>
+            </div>
+            <div className="h-full w-px bg-gray-200 mx-2" />
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setScale(prev => Math.max(0.5, prev - 0.1))}
+                className="px-3 py-2 bg-gray-100 rounded hover:bg-gray-200"
+              >
+                축소
+              </button>
+              <span className="min-w-[60px] text-center">{Math.round(scale * 100)}%</span>
+              <button
+                onClick={() => setScale(prev => Math.min(2, prev + 0.1))}
+                className="px-3 py-2 bg-gray-100 rounded hover:bg-gray-200"
+              >
+                확대
+              </button>
+            </div>
+          </div>
+        </>
       )}
     </div>
   );

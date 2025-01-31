@@ -1,25 +1,29 @@
-import type { Box } from '@/features/box/types';
+import type { Box } from '@/types';
 
 export interface Connection {
   id: string;
-  startBoxId: string;
-  endBoxId: string;
-  type: 'arrow' | 'line';
-  color?: string;
-  label?: string;
+  startBox: Box;
+  endBox: Box;
+  layerId: string;
 }
 
 export interface ConnectionState {
   connections: Connection[];
-  selectedConnectionId: string | null;
-  editingConnectionId: string | null;
+  selectedConnection: Connection | null;
+}
+
+export interface ConnectionContextType extends ConnectionState {
+  addConnection: (startBox: Box, endBox: Box) => void;
+  updateConnection: (id: string, updates: Partial<Connection>) => void;
+  deleteConnection: (id: string) => void;
+  setSelectedConnection: (connection: Connection | null) => void;
+  getConnectionsByPage: (pageNumber: number) => Connection[];
 }
 
 export interface ConnectionDrawingState {
   isDrawing: boolean;
-  startBoxId: string | null;
-  endBoxId: string | null;
-  type: 'arrow' | 'line';
+  startBox: Box | null;
+  endBox: Box | null;
 }
 
 export interface ConnectionPoint {

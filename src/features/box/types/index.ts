@@ -5,9 +5,10 @@ export interface Box {
   width: number;
   height: number;
   text?: string;
-  type?: 'title' | 'content' | 'note';
-  layerId: string;
+  type?: string;
+  layerId?: string;
   color?: string;
+  pageNumber?: number;
   metadata?: {
     createdAt: string;
     updatedAt: string;
