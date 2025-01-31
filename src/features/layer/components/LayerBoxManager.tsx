@@ -55,8 +55,6 @@ interface LayerBoxManagerProps {
   createGroupBox: (documentId: string, pageNumber: number, groupId: string, groupBox: GroupBox) => void;
   selectedBoxes: Box[];
   onBoxesSelect: (boxes: Box[]) => void;
-  isMultiSelectMode: boolean;
-  onMultiSelectModeChange: (isMultiSelect: boolean) => void;
   edges: Connection[];
   onEdgeAdd: (startBox: Box, endBox: Box) => void;
   onEdgeDelete: (edgeId: string, pageNumber: number, layerId: string) => void;
@@ -125,8 +123,6 @@ export const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
   createGroupBox,
   selectedBoxes,
   onBoxesSelect,
-  isMultiSelectMode,
-  onMultiSelectModeChange,
   edges,
   onEdgeAdd,
   onEdgeDelete,
@@ -354,21 +350,20 @@ export const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
   }, [isResizing, startPos, startSize]);
 
   const handleBoxSelect = (boxId: string) => {
-    if (isMultiSelectMode) {
-      setSelectedBoxIds(prev => {
-        const newSet = new Set(prev);
-        if (newSet.has(boxId)) {
-          newSet.delete(boxId);
-        } else {
-          newSet.add(boxId);
-        }
-        return newSet;
-      });
-    } else {
-      const box = allBoxes.find(b => b.id === boxId);
-      if (box) {
-        onBoxSelect(box);
+    setSelectedBoxIds(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(boxId)) {
+        newSet.delete(boxId);
+      } else {
+        newSet.add(boxId);
       }
+      return newSet;
+    });
+    
+    // 단일 박스 선택도 함께 업데이트
+    const box = allBoxes.find(b => b.id === boxId);
+    if (box) {
+      onBoxSelect(box);
     }
   };
 
@@ -438,14 +433,8 @@ export const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
       return;
     }
 
-    // 다중 선택 모드일 때는 체크박스 선택/해제
-    if (isMultiSelectMode) {
-      handleBoxSelect(box.id);
-      return;
-    }
-
-    // 일반 모드일 때는 박스 선택
-    onBoxSelect(box);
+    // 항상 다중 선택 모드로 동작
+    handleBoxSelect(box.id);
   };
 
   // 박스 수정 핸들러 수정
@@ -691,22 +680,6 @@ export const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
                 선택 삭제 ({selectedBoxIds.size}개)
               </button>
             )}
-            <button
-              onClick={() => {
-                onMultiSelectModeChange(!isMultiSelectMode);
-                setSelectedBoxIds(new Set());
-              }}
-              className={`px-3 py-1.5 rounded-md text-xs transition-colors flex items-center gap-1.5 ${
-                isMultiSelectMode 
-                  ? 'bg-blue-100 text-blue-700 hover:bg-blue-200' 
-                  : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-              }`}
-            >
-              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 6h16M4 10h16M4 14h16M4 18h16" />
-              </svg>
-              {isMultiSelectMode ? '다중 선택 끄기' : '다중 선택 켜기'}
-            </button>
           </div>
         </div>
         <div className="flex-1 overflow-auto">
@@ -1179,6 +1152,11 @@ export const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <div className="flex items-center gap-2 px-3 py-1.5 bg-gray-50 border border-gray-100 rounded-md">
+            {selectedBoxIds.size > 0 && (
+              <span className="text-xs text-gray-600">
+                {selectedBoxIds.size}개 선택됨
+              </span>
+            )}
           </div>
         </div>
         

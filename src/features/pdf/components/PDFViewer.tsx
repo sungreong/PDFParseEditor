@@ -529,46 +529,6 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
     };
   };
 
-  // 다중 선택 상태 추가
-  const [selectedBoxIds, setSelectedBoxIds] = useState<Set<string>>(new Set());
-
-  // 다중 삭제 핸들러 추가
-  const handleMultipleDelete = async () => {
-    if (selectedBoxIds.size === 0) return;
-    
-    if (window.confirm(`선택한 ${selectedBoxIds.size}개의 박스를 삭제하시겠습니까?`)) {
-      try {
-        // 선택된 모든 박스 삭제
-        for (const boxId of Array.from(selectedBoxIds)) {
-          await handleRemoveBox(boxId);
-        }
-        
-        // 선택 상태 초기화
-        setSelectedBoxIds(new Set());
-        setSelectedBox(null);
-        
-        // 성공 메시지 표시
-        const popup = document.createElement('div');
-        popup.className = 'fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-red-100 border border-red-400 text-red-700 px-6 py-3 rounded shadow-lg z-[9999] flex items-center gap-2';
-        popup.innerHTML = `
-          <svg class="w-5 h-5 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7"></path>
-          </svg>
-          <span class="font-medium">${selectedBoxIds.size}개의 박스가 삭제되었습니다</span>
-        `;
-        
-        document.body.appendChild(popup);
-        setTimeout(() => {
-          popup.classList.add('opacity-0', 'transition-opacity', 'duration-300');
-          setTimeout(() => document.body.removeChild(popup), 300);
-        }, 1500);
-      } catch (error) {
-        console.error('박스 다중 삭제 중 오류 발생:', error);
-        alert('박스 삭제 중 오류가 발생했습니다.');
-      }
-    }
-  };
-
   // 페이지별 엣지 상태 관리
   const [isDrawingEdge, setIsDrawingEdge] = useState(false);
   const [edgeStartBox, setEdgeStartBox] = useState<Box | null>(null);
@@ -703,24 +663,12 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
       return;
     }
 
-    if (toolState.isMultiSelectMode) {
-      setSelectedBoxIds(prev => {
-        const newSet = new Set(prev);
-        if (newSet.has(box.id)) {
-          newSet.delete(box.id);
-        } else {
-          newSet.add(box.id);
-        }
-        return newSet;
-      });
-    } else {
-      handleToolBoxSelect(box.id);
-      if (openDetail) {
-        setSelectedBox(box);
-        setIsBoxDetailOpen(true);
-      }
+    handleToolBoxSelect(box.id);
+    if (openDetail) {
+      setSelectedBox(box);
+      setIsBoxDetailOpen(true);
     }
-  }, [isDrawingEdge, edgeStartBox, handleAddEdge, toolState.isMultiSelectMode, handleToolBoxSelect, getBoxCenter]);
+  }, [isDrawingEdge, edgeStartBox, handleAddEdge, handleToolBoxSelect, getBoxCenter]);
 
   // 페이지 변경 핸들러 수정
   const handlePageChange = useCallback((newPage: number) => {
@@ -1242,7 +1190,7 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
               const layer = layers.find(l => l.id === box.layerId);
               if (!layer?.isVisible) return null;
               
-              const isSelected = toolState.isMultiSelectMode ? selectedBoxIds.has(box.id) : selectedBox?.id === box.id;
+              const isSelected = selectedBox?.id === box.id;
               const isEditing = editingBox?.id === box.id;
               
               return (
@@ -1293,7 +1241,6 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
     currentBox,
     activeLayer,
     selectedBox,
-    selectedBoxIds,
     editingBox,
     handleBoxClick,
     handleCanvasMouseDown,
@@ -1574,8 +1521,6 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
             setIsDrawingEdge={setIsDrawingEdge}
             scale={scale}
             setScale={setScale}
-            selectedBoxIds={selectedBoxIds}
-            handleMultipleDelete={handleMultipleDelete}
             isSelectingEdge={isSelectingEdge}
             setIsSelectingEdge={setIsSelectingEdge}
             selectedEdgeId={selectedEdgeId}

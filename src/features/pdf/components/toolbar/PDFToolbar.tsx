@@ -8,8 +8,6 @@ interface PDFToolbarProps {
   setIsDrawingEdge: (isDrawing: boolean) => void;
   scale: number;
   setScale: (scale: number | ((prev: number) => number)) => void;
-  selectedBoxIds: Set<string>;
-  handleMultipleDelete: () => void;
   isSelectingEdge: boolean;
   setIsSelectingEdge: (isSelecting: boolean) => void;
   selectedEdgeId: string | null;
@@ -25,8 +23,6 @@ const PDFToolbar: React.FC<PDFToolbarProps> = ({
   setIsDrawingEdge,
   scale,
   setScale,
-  selectedBoxIds,
-  handleMultipleDelete,
   isSelectingEdge,
   setIsSelectingEdge,
   selectedEdgeId,
@@ -123,19 +119,6 @@ const PDFToolbar: React.FC<PDFToolbarProps> = ({
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
           </svg>
           <span>연결선 자동 연결</span>
-        </button>
-        <button
-          onClick={toolActions.onToggleMultiSelect}
-          className={`px-4 py-2 rounded-lg flex items-center gap-2 ${
-            toolState.isMultiSelectMode 
-              ? 'bg-blue-500 text-white hover:bg-blue-600' 
-              : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-          } transition-colors`}
-        >
-          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 5h16M4 12h16m-7 7h7" />
-          </svg>
-          <span>다중 선택</span>
         </button>
       </div>
       <div className="flex items-center gap-3">
