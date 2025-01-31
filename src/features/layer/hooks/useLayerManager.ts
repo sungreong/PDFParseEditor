@@ -1,35 +1,36 @@
 import { useState, useCallback } from 'react';
 import { v4 as uuidv4 } from 'uuid';
-import type { Box, DocumentPageData } from '../types';
+import type { Box as BoxType, DocumentPageData, TextItem } from '@/types';
 import type { Layer as BaseLayer } from '../types';
 
-export interface Box {
+export interface Box extends BoxType {
   id: string;
+  layerId: string;
+  pageNumber: number;
   x: number;
   y: number;
   width: number;
   height: number;
-  pageNumber: number;
-  layerId: string;
   type: 'box' | 'group';
   color?: string;
   text?: string;
+  textItems?: TextItem[];
   metadata?: {
-    createdAt?: string;
-    updatedAt?: string;
+    createdAt: string;
+    updatedAt: string;
+    extractedAt?: string;
     [key: string]: any;
   };
 }
 
-export interface Layer {
+export interface Layer extends BaseLayer {
   id: string;
   name: string;
   color: string;
   isVisible: boolean;
   boxes: Box[];
+  boxesByPage: Record<number, Box[]>;
 }
-
-export type Layer = BaseLayer;
 
 interface PageData {
   boxes: Box[];
@@ -61,6 +62,11 @@ interface BoxInput {
   pageNumber: number;
   color?: string;
   text?: string;
+  textItems?: TextItem[];
+  metadata?: {
+    extractedAt?: string;
+    [key: string]: any;
+  };
 }
 
 export const useLayerManager = () => {
@@ -182,10 +188,12 @@ export const useLayerManager = () => {
       height: boxInput.height,
       type: 'box',
       color: state.activeLayer.color,
-      text: '',
+      text: boxInput.text || '',
+      textItems: boxInput.textItems || [],
       metadata: {
         createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
+        updatedAt: new Date().toISOString(),
+        extractedAt: boxInput.metadata?.extractedAt || new Date().toISOString()
       }
     };
 
@@ -307,12 +315,17 @@ export const useLayerManager = () => {
     const pageKey = pageNumber.toString();
     
     if (!documentData || !documentData[pageKey]) {
+      // 페이지 데이터가 없을 때는 레이어의 boxesByPage에서 해당 페이지의 박스들을 가져옴
+      const pageBoxes = state.layers.flatMap(layer => 
+        layer.boxesByPage[pageNumber] || []
+      );
+
       return {
         layers: state.layers.map(layer => ({
           ...layer,
           boxes: layer.boxesByPage[pageNumber] || []
         })),
-        boxes: [],
+        boxes: pageBoxes,
         canvases: state.layers.map(layer => ({
           layerId: layer.id,
           canvasRef: canvasRefs[`${documentId}_${pageNumber}_${layer.id}`] || null,
@@ -323,8 +336,18 @@ export const useLayerManager = () => {
 
     const pageData = documentData[pageKey];
     
-    // 현재 페이지의 박스들만 가져오기
-    const pageBoxes = pageData.boxes || [];
+    // 현재 페이지의 박스들과 레이어의 boxesByPage에 있는 박스들을 합침
+    const pageBoxes = [
+      ...(pageData.boxes || []),
+      ...state.layers.flatMap(layer => layer.boxesByPage[pageNumber] || [])
+    ].reduce((unique, box) => {
+      // 중복 제거
+      const exists = unique.find(b => b.id === box.id);
+      if (!exists) {
+        unique.push(box);
+      }
+      return unique;
+    }, [] as Box[]);
     
     // 각 레이어별로 현재 페이지의 박스들만 필터링하여 레이어 정보 구성
     const layersWithPageBoxes = state.layers.map(layer => ({
@@ -350,10 +373,6 @@ export const useLayerManager = () => {
     }));
   }, []);
 
-  const redrawAllCanvases = useCallback(() => {
-    // 캔버스 다시 그리기 로직 구현
-    // 실제 구현은 캔버스 컴포넌트에서 처리
-  }, []);
 
   const updateLayerName = useCallback((layerId: string, newName: string) => {
     setState(prev => ({
@@ -495,7 +514,6 @@ export const useLayerManager = () => {
     removeBox,
     updateBox,
     getPageData,
-    redrawAllCanvases,
     setCanvasRef,
     updateLayerName,
     updateLayerColor,

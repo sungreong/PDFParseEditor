@@ -9,7 +9,7 @@ import { useToolState } from '../hooks/useToolState';
 import { usePDFUpload } from '../hooks/usePDFUpload';
 import { useDocumentManager } from '@/features/document/hooks/useDocumentManager';
 import type { PDFViewerProps } from '../types';
-import type { Layer, Box, GroupBox, Connection, Point, Document as DocumentType } from '@/types';
+import type { Layer, Box, GroupBox, Connection, Point, Document as DocumentType, TextPosition, TextItem } from '@/types';
 import { useConnection } from '@/features/connection/contexts/ConnectionContext';
 import { LayerBoxManager } from '@/features/layer/components/LayerBoxManager';
 import useWindowSize from '@/hooks/useWindowSize';
@@ -90,7 +90,6 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
     pageNumber,
     scale,
     isScrollMode,
-    isTextSelectable,
     visiblePages,
     isSidebarOpen,
     isLayerSidebarOpen,
@@ -98,7 +97,6 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
     setPageNumber,
     setScale,
     setIsScrollMode,
-    setIsTextSelectable,
     setVisiblePages,
     setIsSidebarOpen,
     setIsLayerSidebarOpen,
@@ -124,7 +122,6 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
     removeBox,
     updateBox,
     getPageData,
-    redrawAllCanvases,
     setCanvasRef,
     updateLayerName,
     updateLayerColor,
@@ -187,6 +184,136 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
           : [...(boxesByPage.get(box.pageNumber) || []), box]
     );
   }, [file, boxesByPage]);
+
+  // 페이지별 텍스트 데이터 관리
+  const [pageTextContents, setPageTextContents] = useState<{
+    [pageNumber: number]: Array<{
+      text: string;
+      x: number;
+      y: number;
+      width: number;
+      height: number;
+      transform: number[];
+    }>;
+  }>({});
+
+  const setPageTextContent = useCallback((pageNumber: number, textContent: any[]) => {
+    setPageTextContents(prev => ({
+      ...prev,
+      [pageNumber]: textContent
+    }));
+  }, []);
+
+  // 박스 영역의 텍스트 추출 함수
+  const extractTextFromBox = useCallback((pageNumber: number, boxRect: { left: number; right: number; top: number; bottom: number }) => {
+    const pageTextContent = pageTextContents[pageNumber];
+    if (!pageTextContent) return { text: '', textItems: [] };
+
+    const textItems: TextItem[] = [];
+    let extractedText = '';
+
+    pageTextContent.forEach(item => {
+      const itemX = item.x;
+      const itemY = item.y;
+      const itemWidth = item.width;
+      const itemHeight = item.height;
+
+      // 텍스트 아이템이 박스 영역과 겹치는지 확인
+      if (
+        itemX >= boxRect.left &&
+        itemX + itemWidth <= boxRect.right &&
+        itemY >= boxRect.top &&
+        itemY + itemHeight <= boxRect.bottom
+      ) {
+        textItems.push({
+          text: item.text,
+          x: itemX,
+          y: itemY,
+          width: itemWidth,
+          height: itemHeight,
+          transform: item.transform
+        });
+        extractedText += item.text + ' ';
+      }
+    });
+
+    // 텍스트 위치를 y좌표 기준으로 정렬
+    textItems.sort((a, b) => {
+      const yDiff = Math.abs(a.y - b.y);
+      if (yDiff < 5) { // 같은 줄로 간주
+        return a.x - b.x;
+      }
+      return a.y - b.y;
+    });
+
+    return {
+      text: extractedText.trim(),
+      textItems
+    };
+  }, [pageTextContents]);
+
+  // 박스 추가 핸들러
+  const handleAddBox = useCallback((box: Box) => {
+    if (!file || !activeLayer) {
+      console.log('AddBox - Early return:', { hasFile: !!file, hasActiveLayer: !!activeLayer });
+      return;
+    }
+    
+    const pageNumber = box.pageNumber;
+    
+    console.log('AddBox - Attempting to add box:', {
+      box,
+      fileName: file.name,
+      activeLayerId: activeLayer.id,
+      pageNumber
+    });
+
+    try {
+      // 페이지별 박스 데이터 업데이트
+      const currentBoxes = boxesByPage.get(pageNumber) || [];
+      boxesByPage.set(pageNumber, [...currentBoxes, box]);
+      
+      // 전체 박스 데이터에 추가
+      addBox(file.name, box);
+      
+      
+      return box;
+    } catch (error) {
+      console.error('AddBox - Error adding box:', error);
+      return null;
+    }
+  }, [file, activeLayer, boxesByPage, addBox]);
+
+  // 박스 생성 핸들러
+  const handleBoxCreated = useCallback((box: DrawingBox) => {
+    if (!file || !activeLayer) return;
+    
+    const newBox: Box = {
+      id: `box_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`, // 고유한 ID 생성
+      layerId: activeLayer.id,
+      pageNumber: box.pageNumber,
+      x: box.x,
+      y: box.y,
+      width: box.width,
+      height: box.height,
+      type: 'box',
+      color: activeLayer.color,
+      text: '',
+      textItems: [],
+      metadata: {
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      }
+    };
+
+    // 박스 추가
+    handleAddBox(newBox);
+    setCurrentBox(null);
+    setStartPoint(null);
+    
+    // 새로 생성된 박스 선택
+    setSelectedBox(newBox);
+  }, [file, activeLayer, handleAddBox, setSelectedBox]);
 
   // 파일 업로드 처리
   const handleFileUpload = async (file: File) => {
@@ -286,12 +413,6 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
   // 페이지 렌더링
   const renderPage = (pageNum: number) => {
     const pageData = file ? getPageData(file.name, pageNum) : null;
-    console.log('Rendering page:', { 
-      pageNum, 
-      currentPageNumber: pageNumber,
-      pageData,
-      boxesCount: pageData?.boxes.length 
-    });
     
     return (
       <div
@@ -299,12 +420,25 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
         ref={(ref) => setPageRef(pageNum, ref)}
         className="pdf-page-container relative"
         data-page={pageNum}
-        onMouseDown={(e) => handleCanvasMouseDown(e, pageNum)}
-        onMouseMove={(e) => handleCanvasMouseMove(e, pageNum)}
-        onMouseUp={(e) => handleCanvasMouseUp(e, pageNum)}
+        onMouseDown={(e) => {
+          if (toolState.isDrawMode) {
+            handleCanvasMouseDown(e, pageNum);
+          }
+        }}
+        onMouseMove={(e) => {
+          if (toolState.isDrawMode) {
+            handleCanvasMouseMove(e, pageNum);
+          }
+        }}
+        onMouseUp={(e) => {
+          if (toolState.isDrawMode) {
+            handleCanvasMouseUp(e, pageNum);
+          }
+        }}
         style={{
           width: `${pdfDimensions.scaledWidth}px`,
-          height: `${pdfDimensions.scaledHeight}px`
+          height: `${pdfDimensions.scaledHeight}px`,
+          userSelect: toolState.isDrawMode ? 'none' : 'text',
         }}
       >
         <div className="relative">
@@ -312,10 +446,40 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
             pageNumber={pageNum}
             width={pdfDimensions.width}
             height={pdfDimensions.height}
-            renderTextLayer={isTextSelectable}
+            renderTextLayer={true}
             renderAnnotationLayer={false}
             scale={scale}
+            onGetTextSuccess={(textContent) => {
+              const textItems = textContent.items.map((item: any) => ({
+                text: item.str,
+                x: item.transform[4],
+                y: item.transform[5],
+                width: item.width,
+                height: item.height,
+                transform: item.transform
+              }));
+              setPageTextContents(prev => ({
+                ...prev,
+                [pageNum]: textItems
+              }));
+            }}
           />
+          <style jsx global>{`
+            .react-pdf__Page__textContent {
+              pointer-events: ${toolState.isDrawMode ? 'none' : 'auto'} !important;
+              user-select: ${toolState.isDrawMode ? 'none' : 'text'} !important;
+              -webkit-user-select: ${toolState.isDrawMode ? 'none' : 'text'} !important;
+              -moz-user-select: ${toolState.isDrawMode ? 'none' : 'text'} !important;
+              -ms-user-select: ${toolState.isDrawMode ? 'none' : 'text'} !important;
+            }
+            .react-pdf__Page__textContent span {
+              opacity: 0.4;
+              cursor: ${toolState.isDrawMode ? 'crosshair' : 'text'};
+            }
+            .react-pdf__Page__textContent span::selection {
+              background: rgba(0, 0, 255, 0.3);
+            }
+          `}</style>
           {/* 현재 그리고 있는 박스 미리보기 */}
           {currentBox && toolState.isDrawMode && pageNum === currentBox.pageNumber && (
             <div
@@ -336,7 +500,8 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
               console.log('Rendering box:', { 
                 boxId: box.id, 
                 pageNum, 
-                boxPageNumber: box.pageNumber 
+                boxPageNumber: box.pageNumber,
+                box: box
               });
               const layer = layers.find(l => l.id === box.layerId);
               if (!layer?.isVisible) return null;
@@ -377,34 +542,16 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
     );
   };
 
-  // 박스 그리기 핸들러 수정
+  // 박스 그리기 시작
   const handleCanvasMouseDown = useCallback((e: React.MouseEvent<HTMLDivElement>, pageNum: number) => {
-    if (!toolState.isDrawMode || !activeLayer) {
-      console.log('MouseDown - Early return:', { toolState: toolState.isDrawMode, activeLayer });
-      return;
-    }
+    if (!toolState.isDrawMode || !activeLayer) return;
     
     const pdfContainer = e.currentTarget.querySelector('.react-pdf__Page') as HTMLElement;
-    if (!pdfContainer) {
-      console.log('MouseDown - No PDF container found');
-      return;
-    }
+    if (!pdfContainer) return;
 
     const pdfRect = pdfContainer.getBoundingClientRect();
     const x = (e.clientX - pdfRect.left) / scale;
     const y = (e.clientY - pdfRect.top) / scale;
-    
-    console.log('MouseDown - Coordinates:', {
-      clientX: e.clientX,
-      clientY: e.clientY,
-      pdfRect: {
-        left: pdfRect.left,
-        top: pdfRect.top
-      },
-      scale,
-      calculatedX: x,
-      calculatedY: y
-    });
 
     setStartPoint({ x, y });
     setCurrentBox({
@@ -456,140 +603,157 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
     }
   }, [toolState.isDrawMode, startPoint, currentBox, activeLayer, scale]);
 
-  // 박스 추가 핸들러 수정
-  const handleAddBox = useCallback((box: Box) => {
-    if (!file || !activeLayer) {
-      console.log('AddBox - Early return:', { hasFile: !!file, hasActiveLayer: !!activeLayer });
-      return;
-    }
-    
-    const pageNumber = box.pageNumber;  // 박스의 페이지 번호 추출
-    
-    console.log('AddBox - Attempting to add box:', {
-      box,
-      fileName: file.name,
-      activeLayerId: activeLayer.id,
-      pageNumber
-    });
-
-    // 현재 페이지의 데이터 확인 및 초기화
-    const pageData = getPageData(file.name, pageNumber);
-    console.log('AddBox - Current page data:', { 
-      pageData, 
-      pageNumber,
-      hasPageData: !!pageData 
-    });
-
-    // 페이지 데이터가 없으면 초기화
-    if (!pageData) {
-      console.log('AddBox - Initializing page data for page:', pageNumber);
-      initializeDocumentPage(file.name, pageNumber);
-    }
-
-    try {
-      // 현재 페이지의 박스 목록에만 추가
-      console.log('AddBox - Adding box to page:', { 
-        fileName: file.name, 
-        pageNumber,
-        box 
-      });
-      
-      // 페이지별 박스 데이터 업데이트
-      updateBoxesByPage(box, 'add');
-      
-      // 전체 박스 데이터에 추가
-      addBox(file.name, box);
-      
-      console.log('AddBox - Successfully added box to page:', pageNumber);
-      
-      // 캔버스 다시 그리기
-      redrawAllCanvases();
-    } catch (error) {
-      console.error('AddBox - Error adding box:', error);
-    }
-  }, [file, activeLayer, updateBoxesByPage, addBox, redrawAllCanvases, initializeDocumentPage, getPageData]);
-
-  const handleCanvasMouseUp = useCallback((e: React.MouseEvent<HTMLDivElement>, pageNum: number) => {
+  // 박스 그리기 완료 및 텍스트 추출
+  const handleCanvasMouseUp = useCallback(async (e: React.MouseEvent<HTMLDivElement>, pageNum: number) => {
     if (!toolState.isDrawMode || !startPoint || !currentBox || !activeLayer || !file) {
-      console.log('MouseUp - Early return:', {
-        toolState: toolState.isDrawMode,
-        hasStartPoint: !!startPoint,
-        hasCurrentBox: !!currentBox,
-        hasActiveLayer: !!activeLayer,
-        hasFile: !!file
-      });
       return;
     }
     
     const pdfContainer = e.currentTarget.querySelector('.react-pdf__Page') as HTMLElement;
-    if (!pdfContainer) {
-      console.log('MouseUp - No PDF container found');
-      return;
-    }
+    if (!pdfContainer) return;
 
     const pdfRect = pdfContainer.getBoundingClientRect();
     const x = (e.clientX - pdfRect.left) / scale;
     const y = (e.clientY - pdfRect.top) / scale;
     
-    console.log('MouseUp - Final coordinates:', {
-      startPoint,
-      endPoint: { x, y },
-      scale
-    });
-
     const width = Math.abs(x - startPoint.x);
     const height = Math.abs(y - startPoint.y);
     
-    const minSize = 10 / scale;  // scale에 따른 최소 크기 조정
-    console.log('MouseUp - Box dimensions:', {
-      width,
-      height,
-      minSize,
-      meetsMinSize: width > minSize && height > minSize
-    });
-
+    const minSize = 10 / scale;
     if (width > minSize && height > minSize) {
-      const newBox: Box = {
-        id: `box_${Date.now()}`,
-        x: Math.min(startPoint.x, x),
-        y: Math.min(startPoint.y, y),
-        width,
-        height,
-        pageNumber: pageNum,
-        layerId: activeLayer.id,
-        type: 'box',
-        color: activeLayer.color,
-        text: ''
-      };
+      try {
+        // 박스 영역 계산
+        const boxRect = {
+          left: Math.min(startPoint.x, x),
+          right: Math.max(startPoint.x, x),
+          top: Math.min(startPoint.y, y),
+          bottom: Math.max(startPoint.y, y)
+        };
 
-      console.log('MouseUp - Creating new box:', newBox);
+        // 현재 페이지의 저장된 텍스트 데이터 가져오기
+        const pageTextContent = pageTextContents[pageNum];
+        if (!pageTextContent) {
+          console.warn('페이지의 텍스트 데이터가 없습니다:', pageNum);
+          return;
+        }
 
-      // 페이지 데이터 초기화 확인
-      const pageData = getPageData(file.name, pageNum);
-      if (!pageData) {
-        console.log('MouseUp - Initializing page data');
-        initializeDocumentPage(file.name, pageNum);
+        // 박스 영역 내의 텍스트 필터링
+        let extractedText = '';
+        const textItems: TextItem[] = [];
+
+        pageTextContent.forEach(item => {
+          const itemX = item.x;
+          const itemY = item.y;
+          const itemWidth = item.width;
+          const itemHeight = item.height;
+
+          // 텍스트 아이템이 박스 영역과 겹치는지 확인
+          if (
+            itemX >= boxRect.left &&
+            itemX + itemWidth <= boxRect.right &&
+            itemY >= boxRect.top &&
+            itemY + itemHeight <= boxRect.bottom
+          ) {
+            textItems.push({
+              text: item.text,
+              x: itemX,
+              y: itemY,
+              width: itemWidth,
+              height: itemHeight,
+              transform: item.transform
+            });
+            extractedText += item.text + ' ';
+          }
+        });
+
+        // 텍스트 위치를 y좌표 기준으로 정렬
+        textItems.sort((a, b) => {
+          const yDiff = Math.abs(a.y - b.y);
+          if (yDiff < 5) { // 같은 줄로 간주
+            return a.x - b.x;
+          }
+          return a.y - b.y;
+        });
+
+        // 정렬된 순서로 텍스트 재구성
+        extractedText = textItems.map(item => item.text).join(' ');
+
+        const newBox: Box = {
+          id: `box_${Date.now()}`,
+          layerId: activeLayer.id,
+          pageNumber: pageNum,
+          x: boxRect.left,
+          y: boxRect.top,
+          width,
+          height,
+          type: 'box',
+          color: activeLayer.color,
+          text: extractedText.trim(),
+          textItems,  // 텍스트 아이템 정보 저장
+          metadata: {
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            extractedAt: new Date().toISOString()
+          }
+        };
+
+        console.log('박스 생성:', {
+          box: newBox,
+          textItems,
+          extractedText: extractedText.trim()
+        });
+
+        handleBoxCreated(newBox);
+      } catch (error) {
+        console.error('텍스트 추출 중 오류 발생:', error);
+        // 에러가 발생해도 박스는 생성
+        const newBox: Box = {
+          id: `box_${Date.now()}`,
+          layerId: activeLayer.id,
+          pageNumber: pageNum,
+          x: Math.min(startPoint.x, x),
+          y: Math.min(startPoint.y, y),
+          width,
+          height,
+          type: 'box',
+          color: activeLayer.color,
+          text: '',
+          metadata: {
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString()
+          }
+        };
+        handleBoxCreated(newBox);
       }
-
-      handleAddBox(newBox);
     }
 
     setStartPoint(null);
     setCurrentBox(null);
-  }, [toolState.isDrawMode, startPoint, currentBox, activeLayer, file, scale, handleAddBox, getPageData, initializeDocumentPage]);
+  }, [toolState.isDrawMode, startPoint, currentBox, activeLayer, file, scale, handleBoxCreated, pageTextContents]);
 
   // 박스 삭제 핸들러 수정
   const handleRemoveBox = useCallback((boxId: string) => {
     if (!file || !selectedBox) return;
     
     const pageNum = selectedBox.pageNumber;
-    const box = boxesByPage.get(pageNum)?.find(b => b.id === boxId);
+    const currentBoxes = boxesByPage.get(pageNum) || [];
+    const box = currentBoxes.find(b => b.id === boxId);
+    
     if (box) {
-      updateBoxesByPage(box, 'remove');
-      removeBox(boxId);
-      redrawAllCanvases();
+      // 페이지별 박스 데이터에서 제거
+      const updatedBoxes = currentBoxes.filter(b => b.id !== boxId);
+      boxesByPage.set(pageNum, updatedBoxes);
+      
+      // 전체 박스 데이터에서 제거
+      removeBox(file.name, boxId);
+      
+      // 선택된 박스 초기화
+      if (selectedBox.id === boxId) {
+        setSelectedBox(null);
+      }
+      
     }
-  }, [file, selectedBox, boxesByPage, updateBoxesByPage, removeBox, redrawAllCanvases]);
+  }, [file, selectedBox, boxesByPage, removeBox, setSelectedBox]);
 
   // 박스 업데이트 핸들러 수정
   const handleUpdateBox = useCallback((boxId: string, updates: Partial<Box>) => {
@@ -606,11 +770,10 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
       updateBox(boxId, updates);
       setIsBoxEditorOpen(false);
       setEditingBox(null);
-      redrawAllCanvases();
     } catch (error) {
       console.error('UpdateBox - Error updating box:', error);
     }
-  }, [file, activeLayer, updateBox, redrawAllCanvases]);
+  }, [file, activeLayer, updateBox]);
 
   // 페이지 변경 시 데이터 초기화 확인
   const handlePageChange = useCallback((newPage: number) => {
@@ -1101,19 +1264,6 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 5h16M4 12h16m-7 7h7" />
                 </svg>
                 <span>다중 선택</span>
-              </button>
-              <button
-                onClick={() => setIsTextSelectable(!isTextSelectable)}
-                className={`px-4 py-2 rounded-lg flex items-center gap-2 ${
-                  isTextSelectable 
-                    ? 'bg-blue-500 text-white hover:bg-blue-600' 
-                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                } transition-colors`}
-              >
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                </svg>
-                <span>텍스트 선택</span>
               </button>
             </div>
             <div className="flex items-center gap-3">

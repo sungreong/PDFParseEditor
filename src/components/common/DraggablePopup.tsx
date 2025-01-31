@@ -10,6 +10,7 @@ export interface DraggablePopupProps {
   zIndex?: number;
   position?: { x: number; y: number };
   onPositionChange?: (position: { x: number; y: number }) => void;
+  headerButtons?: React.ReactNode;
 }
 
 const DraggablePopup: React.FC<DraggablePopupProps> = ({
@@ -21,7 +22,8 @@ const DraggablePopup: React.FC<DraggablePopupProps> = ({
   height = '40vh',
   zIndex = 0,
   position,
-  onPositionChange
+  onPositionChange,
+  headerButtons
 }) => {
   const popupId = useId();
   const popupRef = useRef<HTMLDivElement>(null);
@@ -127,27 +129,30 @@ const DraggablePopup: React.FC<DraggablePopupProps> = ({
         onMouseDown={handleMouseDown}
       >
         <h2 className="text-base font-semibold text-gray-800">{title}</h2>
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            onClose();
-          }}
-          className="p-1 hover:bg-gray-200/80 rounded-full transition-colors"
-        >
-          <svg
-            className="w-4 h-4 text-gray-500"
-            fill="none"
-            stroke="currentColor"
-            viewBox="0 0 24 24"
+        <div className="flex items-center">
+          {headerButtons}
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onClose();
+            }}
+            className="p-1 hover:bg-gray-200/80 rounded-full transition-colors"
           >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth="2"
-              d="M6 18L18 6M6 6l12 12"
-            />
-          </svg>
-        </button>
+            <svg
+              className="w-4 h-4 text-gray-500"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth="2"
+                d="M6 18L18 6M6 6l12 12"
+              />
+            </svg>
+          </button>
+        </div>
       </div>
 
       <div className="flex-1 overflow-y-auto min-h-0">

@@ -1,8 +1,8 @@
 'use client';
 
 import React, { useState, useMemo, useEffect, useCallback, useRef } from 'react';
-import type { Layer, GroupBox, Connection } from '@/types';
-import type { Box } from '@/hooks/useLayerManager';
+import type { Layer, GroupBox, Connection, PDFDocument, Box } from '@/types';
+import type { Box as LayerBox } from '@/hooks/useLayerManager';
 import DraggablePopup from '@/components/common/DraggablePopup';
 import { createPortal } from 'react-dom';
 import BoxDetailEditor from '@/components/BoxDetailEditor';
@@ -63,6 +63,7 @@ interface LayerBoxManagerProps {
   currentPage: number;
   pageNumber: number;
   addBox: (box: Box) => void;
+  pdfDocument: PDFDocument | null;
 }
 
 // 레이어 색상 팔레트 추가
@@ -130,6 +131,7 @@ export const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
   currentPage,
   pageNumber,
   addBox,
+  pdfDocument,
 }) => {
   const [selectedBoxId, setSelectedBoxId] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
@@ -168,8 +170,10 @@ export const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
     const boxes: Array<Box & { pageNumber: number }> = [];
     for (let page = 1; page <= numPages; page++) {
       const pageData = getPageData(documentName, page);
-      const pageBoxes = pageData?.boxes.filter(box => box.layerId === layer?.id) || [];
-      boxes.push(...pageBoxes.map(box => ({ ...box, pageNumber: page })));
+      if (pageData) {
+        const pageBoxes = pageData.boxes.filter(box => box.layerId === layer?.id);
+        boxes.push(...pageBoxes.map(box => ({ ...box, pageNumber: page })));
+      }
     }
     return boxes;
   }, [documentName, layer?.id, numPages, getPageData]);
@@ -187,7 +191,7 @@ export const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
 
   // 필터링된 박스 목록 계산 수정
   const filteredBoxes = useMemo(() => {
-    if (!allBoxes) return []; // allBoxes가 없을 경우 빈 배열 반환
+    if (!allBoxes) return [];
 
     return allBoxes.filter(box => {
       // 페이지 필터
@@ -441,15 +445,77 @@ export const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
   };
 
   // 박스 생성 핸들러 수정
-  const handleBoxCreated = (box: Box) => {
-    const newBox: Box = {
-      ...box,
-      layerId: activeLayer?.id || '',
-      pageNumber: currentPage,
-      color: activeLayer?.color || '#000000',
-    };
+  const handleBoxCreated = async (box: Box) => {
+    try {
+      // PDF 페이지의 텍스트 아이템들을 가져옴
+      const page = await pdfDocument?.getPage(currentPage);
+      if (!page) {
+        throw new Error('PDF 페이지를 찾을 수 없습니다.');
+      }
 
-    addBox(newBox);
+      const textContent = await page.getTextContent();
+      const viewport = page.getViewport({ scale });
+
+      // 박스 영역 내의 텍스트 찾기
+      const boxRect = {
+        left: box.x / scale,
+        right: (box.x + box.width) / scale,
+        top: box.y / scale,
+        bottom: (box.y + box.height) / scale
+      };
+
+      let extractedText = '';
+      textContent.items.forEach((item: any) => {
+        const itemTransform = item.transform;
+        const itemX = itemTransform[4];
+        const itemY = viewport.height - itemTransform[5];
+        const itemWidth = Math.sqrt(itemTransform[0] * itemTransform[0] + itemTransform[1] * itemTransform[1]) * item.width;
+        const itemHeight = Math.sqrt(itemTransform[2] * itemTransform[2] + itemTransform[3] * itemTransform[3]) * item.height;
+
+        // 텍스트 아이템이 박스 영역과 겹치는지 확인
+        if (
+          itemX < boxRect.right &&
+          itemX + itemWidth > boxRect.left &&
+          itemY < boxRect.bottom &&
+          itemY + itemHeight > boxRect.top
+        ) {
+          extractedText += item.str + ' ';
+        }
+      });
+
+      const now = new Date().toISOString();
+      const newBox: Box = {
+        ...box,
+        type: 'box',
+        layerId: activeLayer?.id || '',
+        pageNumber: currentPage,
+        color: activeLayer?.color || '#000000',
+        text: extractedText.trim(), // 추출된 텍스트 설정
+        metadata: {
+          createdAt: now,
+          updatedAt: now,
+          extractedAt: now,
+        }
+      };
+
+      addBox(newBox);
+    } catch (error) {
+      console.error('텍스트 추출 중 오류 발생:', error);
+      // 에러가 발생해도 박스는 생성
+      const now = new Date().toISOString();
+      const newBox: Box = {
+        ...box,
+        type: 'box',
+        layerId: activeLayer?.id || '',
+        pageNumber: currentPage,
+        color: activeLayer?.color || '#000000',
+        metadata: {
+          createdAt: now,
+          updatedAt: now,
+        }
+      };
+      addBox(newBox);
+    }
   };
 
   // 박스 수정 핸들러 수정
@@ -470,11 +536,74 @@ export const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
     setEditingBox(null);
   }, [onBoxUpdate]);
 
-  // 박스 삭제 핸들러
+  // 박스 삭제 핸들러 수정
   const handleBoxDelete = async (e: React.MouseEvent, box: Box) => {
     e.stopPropagation();
     if (window.confirm('이 박스를 삭제하시겠습니까?')) {
-      onBoxDelete(box.id);
+      try {
+        await onBoxDelete(box.id);
+        
+        // 상태 초기화
+        setSelectedBoxId(null);
+        setSelectedBoxIds(prev => {
+          const newSet = new Set(prev);
+          newSet.delete(box.id);
+          return newSet;
+        });
+        
+        // 편집 중인 박스인 경우 편집창 닫기
+        if (editingBox?.id === box.id) {
+          setIsBoxEditorOpen(false);
+          setEditingBox(null);
+        }
+        
+        // 선택된 박스인 경우 선택 해제
+        if (selectedBox?.id === box.id) {
+          onBoxSelect(null);
+        }
+        
+        // 다중 선택된 박스 목록에서도 제거
+        onBoxesSelect(selectedBoxes.filter(b => b.id !== box.id));
+
+        // 페이지 데이터 강제 리렌더링을 위한 상태 업데이트
+        setSearchTerm(prev => prev + '');
+      } catch (error) {
+        console.error('박스 삭제 중 오류 발생:', error);
+        alert('박스 삭제 중 오류가 발생했습니다.');
+      }
+    }
+  };
+
+  // BoxDetailEditor에서 삭제 처리하는 핸들러 수정
+  const handleBoxDetailDelete = async (boxId: string) => {
+    try {
+      await onBoxDelete(boxId);
+      
+      // 상태 초기화
+      setSelectedBoxId(null);
+      setSelectedBoxIds(prev => {
+        const newSet = new Set(prev);
+        newSet.delete(boxId);
+        return newSet;
+      });
+      
+      // 편집창 닫기
+      setIsBoxEditorOpen(false);
+      setEditingBox(null);
+      
+      // 선택된 박스인 경우 선택 해제
+      if (selectedBox?.id === boxId) {
+        onBoxSelect(null);
+      }
+      
+      // 다중 선택된 박스 목록에서도 제거
+      onBoxesSelect(selectedBoxes.filter(b => b.id !== boxId));
+
+      // 페이지 데이터 강제 리렌더링을 위한 상태 업데이트
+      setSearchTerm(prev => prev + '');
+    } catch (error) {
+      console.error('박스 삭제 중 오류 발생:', error);
+      alert('박스 삭제 중 오류가 발생했습니다.');
     }
   };
 
@@ -1085,7 +1214,7 @@ export const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
         width="30vw"
         height="70vh"
         zIndex={100}
-        initialPosition={layerManagerPosition}
+        position={layerManagerPosition}
         onPositionChange={setLayerManagerPosition}
       >
         <div className="flex h-full flex-col bg-white/80 backdrop-blur-sm rounded-lg">
@@ -1245,6 +1374,7 @@ export const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
             setIsBoxEditorOpen(false);
             setEditingBox(null);
           }}
+          onDelete={handleBoxDetailDelete}
           pageNumber={editingBox.pageNumber}
           documentName={documentName}
           viewerWidth={1200}

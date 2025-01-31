@@ -1,3 +1,5 @@
+import type { PDFDocumentProxy } from 'pdfjs-dist';
+
 export interface Point {
   x: number;
   y: number;
@@ -20,6 +22,23 @@ export interface Layer {
   boxes: Box[];
 }
 
+export interface TextPosition {
+  text: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface TextItem {
+  text: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  transform: number[];
+}
+
 export interface Box {
   id: string;
   x: number;
@@ -31,9 +50,12 @@ export interface Box {
   type: 'box' | 'group';
   color?: string;
   text?: string;
+  textItems?: TextItem[];
+  textPositions?: TextPosition[];
   metadata?: {
-    createdAt?: string;
-    updatedAt?: string;
+    createdAt: string;
+    updatedAt: string;
+    extractedAt?: string;
     [key: string]: any;
   };
 }
@@ -78,6 +100,10 @@ export interface GroupBox {
 }
 
 export interface DocumentPageData {
+  layers: Layer[];
   boxes: Box[];
-  connections: Connection[];
-} 
+  canvases: Canvas[];
+  groupBoxes: GroupBox[];
+}
+
+export type PDFDocument = PDFDocumentProxy; 
