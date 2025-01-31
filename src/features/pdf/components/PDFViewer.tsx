@@ -15,7 +15,7 @@ import { LayerBoxManager } from '@/features/layer/components/LayerBoxManager';
 import useWindowSize from '@/hooks/useWindowSize';
 import 'react-pdf/dist/esm/Page/TextLayer.css';
 import 'react-pdf/dist/esm/Page/AnnotationLayer.css';
-import BoxEditor from '@/features/box/components/BoxEditor';
+import BoxDetailEditor from '@/components/BoxDetailEditor';
 import { API_ENDPOINTS } from '@/config/api';
 
 // PDF.js 워커 설정
@@ -1116,7 +1116,7 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
                                 setActiveLayer(layer);
                                 setIsBoxDetailOpen(true);
                               }}
-                              className="text-blue-500 hover:text-blue-700"
+                              className="text-blue-700 hover:bg-blue-100 hover:text-blue-700 transition-colors duration-200"
                             >
                               관리
                             </button>
@@ -1496,12 +1496,24 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
 
           {/* 박스 편집기 */}
           {isBoxEditorOpen && editingBox && (
-            <BoxEditor
+            <BoxDetailEditor
               box={editingBox}
-              onSave={(updates) => handleUpdateBox(editingBox.id, updates)}
+              originalBox={originalBox}
+              onUpdate={(boxId: string, updates: Partial<Box>) => handleUpdateBox(boxId, updates)}
               onCancel={() => {
                 setIsBoxEditorOpen(false);
                 setEditingBox(null);
+              }}
+              onDelete={(boxId: string) => handleRemoveBox(boxId)}
+              pageNumber={pageNumber}
+              documentName={file.name}
+              viewerWidth={pdfDimensions.width}
+              viewerHeight={pdfDimensions.height}
+              layers={layers}
+              isOpen={isBoxEditorOpen}
+              position={{ x: 500, y: 100 }}
+              onPositionChange={(newPosition: { x: number; y: number }) => {
+                console.log('박스 위치 변경:', newPosition);
               }}
             />
           )}
