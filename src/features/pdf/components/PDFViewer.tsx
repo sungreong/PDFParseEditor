@@ -16,6 +16,7 @@ import useWindowSize from '@/hooks/useWindowSize';
 import 'react-pdf/dist/esm/Page/TextLayer.css';
 import 'react-pdf/dist/esm/Page/AnnotationLayer.css';
 import BoxEditor from '@/features/box/components/BoxEditor';
+import { API_ENDPOINTS } from '@/config/api';
 
 // PDF.js 워커 설정
 pdfjs.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjs.version}/pdf.worker.js`;
@@ -836,11 +837,14 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
       // 전체 박스 데이터에서 제거
       removeBox(file.name, boxId);
       
+      // 캡처된 이미지 캐시에서 제거
+      capturedBoxes.delete(boxId);
+      
       // 선택된 박스 초기화
       if (selectedBox.id === boxId) {
         setSelectedBox(null);
+        setBoxImage(null);
       }
-      
     }
   }, [file, selectedBox, boxesByPage, removeBox, setSelectedBox]);
 
@@ -857,6 +861,11 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
 
     try {
       updateBox(boxId, updates);
+      // 박스 크기나 위치가 변경된 경우 캐시된 이미지 삭제
+      if (updates.x !== undefined || updates.y !== undefined || 
+          updates.width !== undefined || updates.height !== undefined) {
+        capturedBoxes.delete(boxId);
+      }
       setIsBoxEditorOpen(false);
       setEditingBox(null);
     } catch (error) {
@@ -942,6 +951,136 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
     setEditingBox(box);
     setIsBoxEditorOpen(true);
   }, []);
+
+  // 캡처 관련 상태 추가
+  const [isCapturing, setIsCapturing] = useState(false);
+  const [boxImage, setBoxImage] = useState<string | null>(null);
+  const [capturedBoxes] = useState(() => new Map<string, string>()); // boxId -> imageUrl 매핑
+  const [selectedBoxForCapture, setSelectedBoxForCapture] = useState<Box | null>(null);
+
+  // PDF 좌표 변환 유틸리티 함수 추가
+  const convertToServerCoordinates = useCallback((box: Box) => {
+    // PDF 기본 크기 (A4)
+    const PDF_WIDTH = 595.276; // PDF 포인트 단위
+    const PDF_HEIGHT = 841.89; // PDF 포인트 단위
+
+    // 뷰포트 좌표를 PDF 좌표로 변환
+    const pdfX = (box.x * PDF_WIDTH) / pdfDimensions.baseWidth;
+    const pdfY = PDF_HEIGHT - ((box.y * PDF_HEIGHT) / pdfDimensions.baseHeight) - ((box.height * PDF_HEIGHT) / pdfDimensions.baseHeight);
+    const pdfWidth = (box.width * PDF_WIDTH) / pdfDimensions.baseWidth;
+    const pdfHeight = (box.height * PDF_HEIGHT) / pdfDimensions.baseHeight;
+
+    console.log('좌표 변환:', {
+      original: {
+        x: box.x,
+        y: box.y,
+        width: box.width,
+        height: box.height
+      },
+      converted: {
+        x: pdfX,
+        y: pdfY,
+        width: pdfWidth,
+        height: pdfHeight
+      },
+      scale,
+      dimensions: {
+        pdf: { width: PDF_WIDTH, height: PDF_HEIGHT },
+        viewport: { width: pdfDimensions.baseWidth, height: pdfDimensions.baseHeight }
+      }
+    });
+
+    return {
+      x: Math.round(pdfX),
+      y: Math.round(pdfY),
+      width: Math.round(pdfWidth),
+      height: Math.round(pdfHeight)
+    };
+  }, [pdfDimensions, scale]);
+
+  // 캡처 함수 수정
+  const captureBoxArea = useCallback(async (targetBox: Box, forceCapture: boolean = false) => {
+    if (!file || !targetBox) {
+      console.warn('필수 정보가 누락되었습니다:', { file, targetBox });
+      return;
+    }
+
+    // 이미 캡처된 박스인지 확인
+    const existingImage = capturedBoxes.get(targetBox.id);
+    if (existingImage && !forceCapture) {
+      console.log('이미 캡처된 박스입니다. 캐시된 이미지를 사용합니다:', targetBox.id);
+      setBoxImage(existingImage);
+      return;
+    }
+
+    try {
+      setIsCapturing(true);
+
+      // 박스 좌표를 PDF 좌표계로 변환
+      const pdfCoordinates = convertToServerCoordinates(targetBox);
+
+      console.log('캡처 요청 데이터:', {
+        box_id: targetBox.id,
+        original: {
+          x: targetBox.x,
+          y: targetBox.y,
+          width: targetBox.width,
+          height: targetBox.height,
+        },
+        converted: pdfCoordinates,
+        scale,
+        viewer: {
+          width: pdfDimensions.width,
+          height: pdfDimensions.height,
+          baseWidth: pdfDimensions.baseWidth,
+          baseHeight: pdfDimensions.baseHeight
+        }
+      });
+
+      const response = await fetch(API_ENDPOINTS.CAPTURE_BOX(file.name, targetBox.pageNumber), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          box_id: targetBox.id,
+          ...pdfCoordinates,
+          viewer_width: Math.round(pdfDimensions.baseWidth),
+          viewer_height: Math.round(pdfDimensions.baseHeight),
+          scale: scale
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ detail: '알 수 없는 오류가 발생했습니다.' }));
+        throw new Error(errorData.detail || '캡처 요청 실패');
+      }
+
+      const blob = await response.blob();
+      if (blob.size === 0) {
+        throw new Error('빈 이미지가 반환되었습니다.');
+      }
+
+      const imageUrl = URL.createObjectURL(blob);
+      setBoxImage(imageUrl);
+      capturedBoxes.set(targetBox.id, imageUrl); // 캡처된 이미지 캐시
+      setSelectedBoxForCapture(targetBox);
+    } catch (error) {
+      console.error('PDF 영역 캡처 실패:', error);
+      setBoxImage(null);
+      capturedBoxes.delete(targetBox.id); // 에러 발생 시 캐시에서 제거
+    } finally {
+      setIsCapturing(false);
+    }
+  }, [file, scale, pdfDimensions, convertToServerCoordinates]);
+
+  // 캡처 새로고침 핸들러 추가
+  const handleRefreshCapture = useCallback((boxId: string) => {
+    const box = selectedBox;
+    if (box && box.id === boxId) {
+      captureBoxArea(box, true); // forceCapture를 true로 설정하여 강제로 새로 캡처
+    }
+  }, [selectedBox, captureBoxArea]);
 
   return (
     <div className="flex flex-col items-center p-4 min-h-screen" ref={containerRef}>

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import type { Box } from '@/hooks/useLayerManager';
 import ReactMarkdown from 'react-markdown';
 import { PDFDocumentProxy } from 'pdfjs-dist';
@@ -91,6 +91,14 @@ const BoxDetailEditor: React.FC<BoxDetailEditorProps> = ({
     { id: 'gpt-3.5', name: 'GPT-3.5' },
     { id: 'claude-3', name: 'Claude 3' },
   ];
+
+  // 이전 박스 크기 추적을 위한 ref 추가
+  const prevBoxDimensionsRef = useRef({
+    x: box.x,
+    y: box.y,
+    width: box.width,
+    height: box.height
+  });
 
   const handlePositionChange = (axis: 'x' | 'y', value: number) => {
     if (isNaN(value)) return;
@@ -483,7 +491,7 @@ const BoxDetailEditor: React.FC<BoxDetailEditorProps> = ({
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          box_id: box.id,
+          id: box.id,
           x: Math.round(box.x),
           y: Math.round(box.y),
           width: Math.round(box.width),
@@ -515,6 +523,27 @@ const BoxDetailEditor: React.FC<BoxDetailEditorProps> = ({
 
   useEffect(() => {
     if (!isOpen) return;
+
+    // 박스 크기나 위치가 변경되었는지 확인
+    const isDimensionsChanged = 
+      prevBoxDimensionsRef.current.x !== box.x ||
+      prevBoxDimensionsRef.current.y !== box.y ||
+      prevBoxDimensionsRef.current.width !== box.width ||
+      prevBoxDimensionsRef.current.height !== box.height;
+
+    // 현재 박스 크기 저장
+    prevBoxDimensionsRef.current = {
+      x: box.x,
+      y: box.y,
+      width: box.width,
+      height: box.height
+    };
+
+    // 이미지가 이미 있고 크기가 변경되지 않았다면 캡처하지 않음
+    if (boxImage && !isDimensionsChanged) {
+      console.log('박스 크기가 변경되지 않아 캡처를 건너뜁니다.');
+      return;
+    }
     
     const timer = setTimeout(() => {
       captureBoxArea();
@@ -527,7 +556,7 @@ const BoxDetailEditor: React.FC<BoxDetailEditorProps> = ({
         URL.revokeObjectURL(boxImage);
       }
     };
-  }, [isOpen, captureBoxArea, boxImage]);
+  }, [isOpen, captureBoxArea, boxImage, box.x, box.y, box.width, box.height]);
 
   const handleDelete = () => {
     if (window.confirm('이 박스를 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다.')) {
