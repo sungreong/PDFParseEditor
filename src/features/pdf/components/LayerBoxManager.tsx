@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useCallback } from 'react';
 import type { Layer, Box, Connection } from '@/types';
 
 interface LayerBoxManagerProps {
@@ -57,62 +57,80 @@ export const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
 
   // 모든 박스 정보 가져오기
   const allBoxes = useMemo(() => {
-    if (!layer || !documentName) return [];
-    
-    // 모든 페이지의 박스 정보 가져오기
+    console.log('=== allBoxes 계산 시작 ===');
+    console.log('documentName:', documentName);
+    console.log('layer:', layer);
+    console.log('numPages:', numPages);
+
+    if (!layer || !documentName) {
+      console.log('layer 또는 documentName이 없음');
+      return [];
+    }
+
     const boxes: Box[] = [];
     for (let page = 1; page <= numPages; page++) {
       const pageData = getPageData(documentName, page);
+      console.log(`페이지 ${page} 데이터:`, pageData);
+
       if (pageData) {
-        const pageBoxes = pageData.boxes.filter(box => box.layerId === layer.id);
+        const pageBoxes = pageData.boxes.filter(box => {
+          const isLayerMatch = box.layerId === layer.id;
+          const isPageMatch = box.pageNumber === page;
+          console.log(`박스 ${box.id} - layerId 일치: ${isLayerMatch}, pageNumber 일치: ${isPageMatch}`);
+          return isLayerMatch && isPageMatch;
+        });
+
+        console.log(`페이지 ${page}의 유효한 박스:`, pageBoxes);
         boxes.push(...pageBoxes);
       }
     }
+
+    console.log('최종 allBoxes:', boxes);
+    console.log('=== allBoxes 계산 완료 ===');
     return boxes;
   }, [documentName, layer?.id, numPages, getPageData]);
 
   // 페이지별로 박스 그룹화
   const boxesByPage = useMemo(() => {
+    console.log('=== boxesByPage 계산 시작 ===');
     const grouped = new Map<number, Box[]>();
-    allBoxes.forEach((box: Box) => {
+    
+    allBoxes.forEach(box => {
+      if (!box.pageNumber) {
+        console.warn(`경고: pageNumber가 없는 박스 발견:`, box);
+        return;
+      }
+      console.log(`박스 ${box.id}를 페이지 ${box.pageNumber}에 그룹화`);
       const pageBoxes = grouped.get(box.pageNumber) || [];
       pageBoxes.push(box);
-      grouped.set(box.pageNumber, pageBoxes);
+      grouped.set(box.pageNumber, pageBoxes.sort((a, b) => a.y - b.y));
     });
+
+    console.log('그룹화된 결과:', Object.fromEntries(grouped));
+    console.log('=== boxesByPage 계산 완료 ===');
     return grouped;
   }, [allBoxes]);
 
-  // 필터링된 박스 목록 계산 수정
-  const filteredBoxes = useMemo(() => {
-    return allBoxes.filter((box: Box) => {
-      // 페이지 필터
-      if (filterState.selectedPage && box.pageNumber !== filterState.selectedPage) return false;
-      
-      // 텍스트 검색 필터
-      if (filterState.searchTerm && !box.text?.toLowerCase().includes(filterState.searchTerm.toLowerCase())) return false;
-      
-      // 텍스트 길이 필터
-      if (filterState.textLengthFilter.type !== 'none') {
-        const textLength = box.text?.length || 0;
-        if (filterState.textLengthFilter.type === 'more' && textLength < filterState.textLengthFilter.value) return false;
-        if (filterState.textLengthFilter.type === 'less' && textLength > filterState.textLengthFilter.value) return false;
-      }
-      
-      return true;
-    }).sort((a: Box, b: Box) => {
-      if (filterState.sortBy === 'position') {
-        // 페이지 번호로 먼저 정렬하고, 같은 페이지 내에서는 y 좌표로 정렬
-        return a.pageNumber === b.pageNumber ? a.y - b.y : a.pageNumber - b.pageNumber;
-      }
-      return 0;
-    });
-  }, [allBoxes, filterState]);
+  // 박스 삭제 핸들러
+  const handleBoxDelete = useCallback((e: React.MouseEvent, boxId: string) => {
+    e.stopPropagation();
+    console.log('박스 삭제 시도:', boxId);
+    onBoxDelete(boxId);
+  }, [onBoxDelete]);
+
+  // 박스 수정 핸들러
+  const handleBoxEdit = useCallback((e: React.MouseEvent, box: Box) => {
+    e.stopPropagation();
+    console.log('박스 수정 시도:', box);
+    onBoxEdit(box);
+  }, [onBoxEdit]);
 
   // 박스 렌더링 수정
-  const renderBox = (box: Box) => {
+  const renderBox = (box: Box & { pageNumber: number }) => {
+    const uniqueKey = `${box.id}_page${box.pageNumber}`;
     return (
       <div
-        key={box.id}
+        key={uniqueKey}
         className={`text-xs p-2 bg-white border rounded relative ${
           startBox?.id === box.id ? 'ring-2 ring-blue-500' : ''} 
         ${isDrawingArrow ? 'cursor-pointer' : ''}
@@ -121,6 +139,7 @@ export const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
       >
         <div className="flex justify-between items-center mb-1">
           <span className="text-gray-500">
+            페이지: {box.pageNumber} |
             위치: ({Math.round(box.x)}, {Math.round(box.y)}) | 
             크기: {Math.round(box.width)}×{Math.round(box.height)} |
             텍스트: {box.text ? `${box.text.length}자` : '0자'}
@@ -129,16 +148,13 @@ export const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
             {!isDrawingArrow && (
               <>
                 <button
-                  onClick={(e) => handleEditBox(e, box)}
+                  onClick={(e) => handleBoxEdit(e, box)}
                   className="text-blue-500 hover:text-blue-700 text-xs"
                 >
                   수정
                 </button>
                 <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onBoxDelete(box.id);
-                  }}
+                  onClick={(e) => handleBoxDelete(e, box.id)}
                   className="text-red-500 hover:text-red-700 text-xs ml-1"
                 >
                   삭제
@@ -170,15 +186,13 @@ export const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
             if (filteredBoxes.length === 0) return null;
 
             return (
-              <div key={pageNum} className="mb-4">
+              <div key={`page_${pageNum}`} className="mb-4">
                 <div className="bg-gray-100 px-2 py-1 font-semibold text-xs sticky top-0 flex justify-between items-center">
                   <span>페이지 {pageNum}</span>
                   <span className="text-gray-500">{filteredBoxes.length}개 박스</span>
                 </div>
                 <div className="space-y-2 mt-1">
-                  {filteredBoxes
-                    .sort((a, b) => (filterState.sortBy === 'position' ? a.y - b.y : 0))
-                    .map(box => renderBox(box))}
+                  {filteredBoxes.map(box => renderBox(box))}
                 </div>
               </div>
             );
