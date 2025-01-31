@@ -20,6 +20,7 @@ export interface Layer {
   color: string;
   isVisible: boolean;
   boxes: Box[];
+  boxesByPage: Record<number, Box[]>;
 }
 
 export interface TextPosition {

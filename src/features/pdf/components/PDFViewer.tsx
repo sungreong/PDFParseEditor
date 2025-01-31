@@ -212,174 +212,6 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
     }));
   }, []);
 
-  // PDF 텍스트 추출 유틸리티 함수
-  const extractTextFromBox = useCallback((pageNumber: number, box: Box) => {
-    console.log('텍스트 추출 시작:', { pageNumber, box, scale });
-    
-    const pageTextContent = pageTextContents[pageNumber];
-    if (!pageTextContent) {
-      console.warn('페이지 텍스트 데이터 없음:', pageNumber);
-      return { text: '', textItems: [] };
-    }
-
-    // 박스 영역을 스케일 독립적인 좌표로 변환
-    const normalizedBoxArea = {
-      left: box.x * scale,
-      right: (box.x + box.width) * scale,
-      top: box.y * scale,
-      bottom: (box.y + box.height) * scale
-    };
-
-    console.log('정규화된 박스 영역:', normalizedBoxArea);
-
-    const textItems: TextItem[] = [];
-    
-    // PDF 기본 크기 (A4)
-    const PDF_WIDTH = 595.276; // PDF 포인트 단위
-    const PDF_HEIGHT = 841.89; // PDF 포인트 단위
-
-    // 뷰포트와 PDF 사이의 스케일 계산
-    const viewportToPDFScaleX = PDF_WIDTH / pdfDimensions.baseWidth;
-    const viewportToPDFScaleY = PDF_HEIGHT / pdfDimensions.baseHeight;
-    
-    // 각 텍스트 아이템 처리
-    pageTextContent.forEach((item, index) => {
-      // PDF 좌표계에서의 텍스트 정보
-      const [itemScaleX, skewX, skewY, itemScaleY, pdfX, pdfY] = item.transform;
-      const pdfWidth = item.width;
-      const pdfHeight = item.height;
-
-      // PDF 좌표를 스케일 독립적인 뷰포트 좌표로 변환
-      const baseViewportX = (pdfX * pdfDimensions.baseWidth) / PDF_WIDTH;
-      const baseViewportY = pdfDimensions.baseHeight - ((pdfY + pdfHeight) * pdfDimensions.baseHeight / PDF_HEIGHT);
-      const baseViewportWidth = (pdfWidth * pdfDimensions.baseWidth) / PDF_WIDTH;
-      const baseViewportHeight = (pdfHeight * pdfDimensions.baseHeight) / PDF_HEIGHT;
-
-      // 현재 스케일에 맞춰 좌표 조정
-      const viewportX = baseViewportX * scale;
-      const viewportY = baseViewportY * scale;
-      const viewportWidth = baseViewportWidth * scale;
-      const viewportHeight = baseViewportHeight * scale;
-
-      console.log(`텍스트 아이템 #${index} 좌표 변환:`, {
-        text: item.text,
-        pdf: { 
-          x: pdfX, 
-          y: pdfY, 
-          width: pdfWidth, 
-          height: pdfHeight,
-          scale: [itemScaleX, itemScaleY]
-        },
-        baseViewport: {
-          x: baseViewportX,
-          y: baseViewportY,
-          width: baseViewportWidth,
-          height: baseViewportHeight
-        },
-        scaledViewport: { 
-          x: viewportX, 
-          y: viewportY, 
-          width: viewportWidth, 
-          height: viewportHeight 
-        },
-        scales: {
-          viewportToPDFScaleX,
-          viewportToPDFScaleY,
-          userScale: scale
-        }
-      });
-
-      // 텍스트 영역 확장 (여백 추가)
-      const padding = Math.min(viewportWidth, viewportHeight) * 0.2; // 20% 패딩
-      const expandedTextArea = {
-        left: viewportX - padding,
-        right: viewportX + viewportWidth + padding,
-        top: viewportY - padding,
-        bottom: viewportY + viewportHeight + padding
-      };
-
-      // 박스와 확장된 텍스트 영역의 겹침 확인
-      const isIntersecting = (
-        expandedTextArea.left < normalizedBoxArea.right &&
-        expandedTextArea.right > normalizedBoxArea.left &&
-        expandedTextArea.top < normalizedBoxArea.bottom &&
-        expandedTextArea.bottom > normalizedBoxArea.top
-      );
-
-      if (isIntersecting) {
-        // 겹치는 영역 계산
-        const intersection = {
-          left: Math.max(normalizedBoxArea.left, expandedTextArea.left),
-          right: Math.min(normalizedBoxArea.right, expandedTextArea.right),
-          top: Math.max(normalizedBoxArea.top, expandedTextArea.top),
-          bottom: Math.min(normalizedBoxArea.bottom, expandedTextArea.bottom)
-        };
-
-        const intersectionArea = 
-          (intersection.right - intersection.left) * 
-          (intersection.bottom - intersection.top);
-        
-        const textArea = 
-          (expandedTextArea.right - expandedTextArea.left) * 
-          (expandedTextArea.bottom - expandedTextArea.top);
-        
-        const overlapRatio = intersectionArea / textArea;
-
-        console.log(`텍스트 "${item.text}" 겹침 분석:`, {
-          intersection,
-          intersectionArea,
-          textArea,
-          overlapRatio,
-          isIncluded: overlapRatio > 0.2
-        });
-
-        // 겹침 비율 임계값을 낮춤 (0.3 -> 0.2)
-        if (overlapRatio > 0.2) {
-          textItems.push({
-            text: item.text,
-            x: baseViewportX,  // 스케일 독립적인 좌표 저장
-            y: baseViewportY,
-            width: baseViewportWidth,
-            height: baseViewportHeight,
-            transform: item.transform
-          });
-        }
-      }
-    });
-
-    // 텍스트 아이템을 위에서 아래로, 왼쪽에서 오른쪽으로 정렬
-    textItems.sort((a, b) => {
-      const lineThreshold = Math.min(a.height, b.height) * scale;  // 스케일 적용
-      const yDiff = Math.abs(a.y - b.y);
-
-      if (yDiff <= lineThreshold) {
-        return a.x - b.x; // 같은 줄에서는 왼쪽에서 오른쪽으로
-      }
-      return a.y - b.y; // 다른 줄은 위에서 아래로
-    });
-
-    // 정렬된 텍스트 조합
-    const extractedText = textItems
-      .map(item => item.text)
-      .join(' ')
-      .replace(/\s+/g, ' ')
-      .trim();
-
-    console.log('추출된 텍스트:', { 
-      text: extractedText, 
-      itemCount: textItems.length,
-      items: textItems.map(item => ({
-        text: item.text,
-        position: { 
-          x: item.x * scale,  // 현재 스케일에 맞춰 좌표 변환
-          y: item.y * scale 
-        }
-      }))
-    });
-
-    return { text: extractedText, textItems };
-  }, [pageTextContents, pdfDimensions, scale]);
-
   // 박스 추가 핸들러 수정
   const handleAddBox = useCallback((box: Box) => {
     if (!file || !activeLayer) {
@@ -609,7 +441,7 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
     if (window.confirm(`선택한 ${selectedBoxIds.size}개의 박스를 삭제하시겠습니까?`)) {
       try {
         // 선택된 모든 박스 삭제
-        for (const boxId of selectedBoxIds) {
+        for (const boxId of Array.from(selectedBoxIds)) {
           await handleRemoveBox(boxId);
         }
         
@@ -645,10 +477,41 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
   const [edgeStartBox, setEdgeStartBox] = useState<Box | null>(null);
   const [tempEndPoint, setTempEndPoint] = useState<Point | null>(null);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
+  const [isSelectingEdge, setIsSelectingEdge] = useState(false);
 
   // 엣지 추가 핸들러
   const handleAddEdge = useCallback((startBox: Box, endBox: Box) => {
     if (!activeLayer || startBox.pageNumber !== endBox.pageNumber) return;
+
+    // 현재 페이지의 엣지들 확인
+    const currentPageEdges = pageEdges[startBox.pageNumber]?.[activeLayer.id] || [];
+    
+    // 중복 엣지 체크
+    const isDuplicate = currentPageEdges.some(edge => 
+      (edge.startBoxId === startBox.id && edge.endBoxId === endBox.id) ||
+      (edge.startBoxId === endBox.id && edge.endBoxId === startBox.id)
+    );
+
+    // 중복된 엣지가 있으면 생성하지 않음
+    if (isDuplicate) {
+      // 중복 알림 메시지 표시
+      const popup = document.createElement('div');
+      popup.className = 'fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-yellow-100 border border-yellow-400 text-yellow-700 px-6 py-3 rounded shadow-lg z-[9999] flex items-center gap-2';
+      popup.innerHTML = `
+        <svg class="w-5 h-5 text-yellow-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+        </svg>
+        <span class="font-medium">이미 존재하는 연결선입니다</span>
+      `;
+      
+      document.body.appendChild(popup);
+      setTimeout(() => {
+        popup.classList.add('opacity-0', 'transition-opacity', 'duration-300');
+        setTimeout(() => document.body.removeChild(popup), 300);
+      }, 1500);
+      
+      return;
+    }
 
     const newEdge: Edge = {
       id: `edge_${Date.now()}`,
@@ -672,7 +535,7 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
         }
       };
     });
-  }, [activeLayer]);
+  }, [activeLayer, pageEdges]);
 
   // 엣지 삭제 핸들러
   const handleRemoveEdge = useCallback((edgeId: string, pageNumber: number, layerId: string) => {
@@ -714,6 +577,12 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
     });
   }, []);
 
+  // 엣지 삭제 핸들러 래퍼 추가
+  const handleEdgeDeleteWrapper = useCallback((edgeId: string) => {
+    if (!activeLayer || !file) return;
+    handleRemoveEdge(edgeId, pageNumber, activeLayer.id);
+  }, [activeLayer, file, handleRemoveEdge, pageNumber]);
+
   // 박스 클릭 핸들러 수정
   const handleBoxClick = useCallback((box: Box, openDetail: boolean = false) => {
     if (isDrawingEdge) {
@@ -722,13 +591,17 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
         setEdgeStartBox(box);
         setTempEndPoint(getBoxCenter(box));
       } else {
-        // 시작 박스와 동일한 박스가 아니면 엣지 생성
-        if (box.id !== edgeStartBox.id) {
+        if (box.id === edgeStartBox.id) {
+          // 같은 박스를 다시 클릭하면 연결선 그리기 초기화
+          setEdgeStartBox(null);
+          setTempEndPoint(null);
+        } else {
+          // 다른 박스를 클릭하면 연결선 생성
           handleAddEdge(edgeStartBox, box);
+          // 엣지 그리기 상태 초기화
+          setEdgeStartBox(null);
+          setTempEndPoint(null);
         }
-        // 엣지 그리기 상태 초기화
-        setEdgeStartBox(null);
-        setTempEndPoint(null);
       }
       return;
     }
@@ -750,7 +623,7 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
         setIsBoxDetailOpen(true);
       }
     }
-  }, [isDrawingEdge, edgeStartBox, handleAddEdge, toolState.isMultiSelectMode, handleToolBoxSelect]);
+  }, [isDrawingEdge, edgeStartBox, handleAddEdge, toolState.isMultiSelectMode, handleToolBoxSelect, getBoxCenter]);
 
   // 페이지 변경 핸들러 수정
   const handlePageChange = useCallback((newPage: number) => {
@@ -851,27 +724,6 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
   const [boxImage, setBoxImage] = useState<string | null>(null);
   const [capturedBoxes] = useState(() => new Map<string, string>()); // boxId -> imageUrl 매핑
   const [selectedBoxForCapture, setSelectedBoxForCapture] = useState<Box | null>(null);
-
-  // PDF 좌표 변환 유틸리티 함수 추가
-  const convertToServerCoordinates = useCallback((box: Box) => {
-    // PDF 기본 크기 (A4)
-    const PDF_WIDTH = 595.276; // PDF 포인트 단위
-    const PDF_HEIGHT = 841.89; // PDF 포인트 단위
-
-    // 뷰포트 좌표를 PDF 좌표로 변환
-    const pdfX = (box.x * PDF_WIDTH) / pdfDimensions.baseWidth;
-    const pdfY = PDF_HEIGHT - ((box.y * PDF_HEIGHT) / pdfDimensions.baseHeight) - ((box.height * PDF_HEIGHT) / pdfDimensions.baseHeight);
-    const pdfWidth = (box.width * PDF_WIDTH) / pdfDimensions.baseWidth;
-    const pdfHeight = (box.height * PDF_HEIGHT) / pdfDimensions.baseHeight;
-
-    return {
-      x: Math.round(pdfX),
-      y: Math.round(pdfY),
-      width: Math.round(pdfWidth),
-      height: Math.round(pdfHeight)
-    };
-  }, [pdfDimensions, scale]);
-
   // 엣지 렌더링 컴포넌트 수정
   const renderEdges = useCallback((pageNum: number) => {
     if (!activeLayer) return null;
@@ -885,6 +737,20 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
     const arrowHeight = 16 * arrowScale;
     const strokeWidth = Math.max(4, 6 / scale);
 
+    const handleEdgeClick = (edge: Edge, event: React.MouseEvent) => {
+      event.stopPropagation();
+      if (isSelectingEdge) {
+        setSelectedEdgeId(edge.id);
+      }
+    };
+
+    const handleDeleteClick = (edge: Edge, event: React.MouseEvent) => {
+      event.stopPropagation();
+      if (window.confirm('이 연결선을 삭제하시겠습니까?')) {
+        handleEdgeDeleteWrapper(edge.id);
+      }
+    };
+
     return (
       <svg 
         className="absolute inset-0" 
@@ -894,7 +760,7 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
           transform: `scale(${scale})`,
           transformOrigin: 'top left',
           zIndex: 20,
-          pointerEvents: 'none',
+          pointerEvents: isSelectingEdge ? 'auto' : 'none',
           overflow: 'visible'
         }}
       >
@@ -939,10 +805,20 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
           const endPoint = getBoxCenter(endBox);
           const isSelected = selectedEdgeId === edge.id;
 
+          // 선의 중간점 계산
+          const midPoint = {
+            x: (startPoint.x + endPoint.x) / 2,
+            y: (startPoint.y + endPoint.y) / 2
+          };
+
+          // 삭제 버튼의 크기 계산
+          const deleteButtonSize = 24 / scale;
+          const deleteButtonRadius = deleteButtonSize / 2;
+
           return (
-            <g key={edge.id}>
+            <g key={edge.id} onClick={(e) => handleEdgeClick(edge, e)}>
               {/* 선택된 엣지의 강조 효과 */}
-              {isSelected && isBoxDetailOpen && (
+              {isSelected && (
                 <>
                   {/* 배경 글로우 */}
                   <line
@@ -975,17 +851,58 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
                   />
                 </>
               )}
+
               {/* 메인 연결선 */}
               <line
                 x1={startPoint.x}
                 y1={startPoint.y}
                 x2={endPoint.x}
                 y2={endPoint.y}
-                stroke={isSelected && isBoxDetailOpen ? '#3B82F6' : edge.color}
-                strokeWidth={isSelected && isBoxDetailOpen ? strokeWidth * 1.5 : strokeWidth}
-                markerEnd={`url(#${isSelected && isBoxDetailOpen ? `arrowhead-selected-${pageNum}` : `arrowhead-${pageNum}`})`}
-                className={isSelected && isBoxDetailOpen ? 'animate-pulse' : ''}
+                stroke={isSelected ? '#3B82F6' : edge.color}
+                strokeWidth={isSelected ? strokeWidth * 1.5 : strokeWidth}
+                markerEnd={`url(#${isSelected ? `arrowhead-selected-${pageNum}` : `arrowhead-${pageNum}`})`}
+                className={isSelected ? 'animate-pulse' : ''}
+                style={{ cursor: isSelectingEdge ? 'pointer' : 'default' }}
               />
+
+              {/* 투명한 넓은 히트 영역 */}
+              <line
+                x1={startPoint.x}
+                y1={startPoint.y}
+                x2={endPoint.x}
+                y2={endPoint.y}
+                stroke="transparent"
+                strokeWidth={strokeWidth * 4}
+                style={{ cursor: isSelectingEdge ? 'pointer' : 'default' }}
+                className="group"
+              />
+
+              {/* 삭제 버튼 (선택 모드에서만 표시) */}
+              {isSelectingEdge && (
+                <g
+                  transform={`translate(${midPoint.x - deleteButtonRadius}, ${midPoint.y - deleteButtonRadius})`}
+                  onClick={(e) => handleDeleteClick(edge, e)}
+                  className="opacity-0 group-hover:opacity-100 transition-opacity duration-200"
+                  style={{ cursor: 'pointer' }}
+                >
+                  {/* 삭제 버튼 배경 */}
+                  <circle
+                    cx={deleteButtonRadius}
+                    cy={deleteButtonRadius}
+                    r={deleteButtonRadius}
+                    fill="white"
+                    stroke="#EF4444"
+                    strokeWidth={1}
+                  />
+                  {/* X 아이콘 */}
+                  <path
+                    d={`M ${deleteButtonSize * 0.3} ${deleteButtonSize * 0.3} L ${deleteButtonSize * 0.7} ${deleteButtonSize * 0.7} M ${deleteButtonSize * 0.7} ${deleteButtonSize * 0.3} L ${deleteButtonSize * 0.3} ${deleteButtonSize * 0.7}`}
+                    stroke="#EF4444"
+                    strokeWidth={2}
+                    strokeLinecap="round"
+                  />
+                </g>
+              )}
             </g>
           );
         })}
@@ -1007,7 +924,7 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
         )}
       </svg>
     );
-  }, [activeLayer, pageEdges, file, getPageData, scale, selectedEdgeId, getBoxCenter, isBoxDetailOpen, isDrawingEdge, edgeStartBox, tempEndPoint]);
+  }, [activeLayer, pageEdges, file, getPageData, scale, selectedEdgeId, getBoxCenter, isDrawingEdge, edgeStartBox, tempEndPoint, isSelectingEdge, handleEdgeDeleteWrapper]);
 
   // LayerBoxManager에 selectedEdgeId 전달
   const handleEdgeIdSelect = useCallback((edgeId: string) => {
@@ -1512,7 +1429,7 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
                   return acc;
                 }, [])}
                 onEdgeAdd={handleAddEdge}
-                onEdgeDelete={handleRemoveEdge}
+                onEdgeDelete={handleEdgeDeleteWrapper}
                 onEdgeUpdate={(edgeId: string, updates: Partial<Connection>) => {
                   handleEdgeUpdate(edgeId, {
                     ...updates,
@@ -1544,10 +1461,10 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
                 scale={scale}
                 currentPage={pageNumber}
                 addBox={handleAddBox}
-                removeBox={handleRemoveBox}
-                updateBox={handleUpdateBox}
                 onEdgeSelect={handleEdgeIdSelect}
                 selectedEdgeId={selectedEdgeId}
+                pageNumber={pageNumber}
+                pdfDocument={null}
               />
             )}
           </div>
@@ -1562,12 +1479,15 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
             setScale={setScale}
             selectedBoxIds={selectedBoxIds}
             handleMultipleDelete={handleMultipleDelete}
-            isSelectingEdge={selectedEdgeId !== null}
-            setIsSelectingEdge={(isSelecting) => {
-              if (!isSelecting) {
+            isSelectingEdge={isSelectingEdge}
+            setIsSelectingEdge={(selecting) => {
+              setIsSelectingEdge(selecting);
+              if (!selecting) {
                 setSelectedEdgeId(null);
               }
             }}
+            selectedEdgeId={selectedEdgeId}
+            onEdgeDelete={handleEdgeDeleteWrapper}
           />
 
           {/* 박스 편집기 */}
