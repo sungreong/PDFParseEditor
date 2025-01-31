@@ -204,53 +204,173 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
     }));
   }, []);
 
-  // 박스 영역의 텍스트 추출 함수
-  const extractTextFromBox = useCallback((pageNumber: number, boxRect: { left: number; right: number; top: number; bottom: number }) => {
+  // PDF 텍스트 추출 유틸리티 함수
+  const extractTextFromBox = useCallback((pageNumber: number, box: Box) => {
+    console.log('텍스트 추출 시작:', { pageNumber, box, scale });
+    
     const pageTextContent = pageTextContents[pageNumber];
-    if (!pageTextContent) return { text: '', textItems: [] };
+    if (!pageTextContent) {
+      console.warn('페이지 텍스트 데이터 없음:', pageNumber);
+      return { text: '', textItems: [] };
+    }
+
+    // 박스 영역을 스케일 독립적인 좌표로 변환
+    const normalizedBoxArea = {
+      left: box.x * scale,
+      right: (box.x + box.width) * scale,
+      top: box.y * scale,
+      bottom: (box.y + box.height) * scale
+    };
+
+    console.log('정규화된 박스 영역:', normalizedBoxArea);
 
     const textItems: TextItem[] = [];
-    let extractedText = '';
+    
+    // PDF 기본 크기 (A4)
+    const PDF_WIDTH = 595.276; // PDF 포인트 단위
+    const PDF_HEIGHT = 841.89; // PDF 포인트 단위
 
-    pageTextContent.forEach(item => {
-      const itemX = item.x;
-      const itemY = item.y;
-      const itemWidth = item.width;
-      const itemHeight = item.height;
+    // 뷰포트와 PDF 사이의 스케일 계산
+    const viewportToPDFScaleX = PDF_WIDTH / pdfDimensions.baseWidth;
+    const viewportToPDFScaleY = PDF_HEIGHT / pdfDimensions.baseHeight;
+    
+    // 각 텍스트 아이템 처리
+    pageTextContent.forEach((item, index) => {
+      // PDF 좌표계에서의 텍스트 정보
+      const [itemScaleX, skewX, skewY, itemScaleY, pdfX, pdfY] = item.transform;
+      const pdfWidth = item.width;
+      const pdfHeight = item.height;
 
-      // 텍스트 아이템이 박스 영역과 겹치는지 확인
-      if (
-        itemX >= boxRect.left &&
-        itemX + itemWidth <= boxRect.right &&
-        itemY >= boxRect.top &&
-        itemY + itemHeight <= boxRect.bottom
-      ) {
-        textItems.push({
-          text: item.text,
-          x: itemX,
-          y: itemY,
-          width: itemWidth,
-          height: itemHeight,
-          transform: item.transform
+      // PDF 좌표를 스케일 독립적인 뷰포트 좌표로 변환
+      const baseViewportX = (pdfX * pdfDimensions.baseWidth) / PDF_WIDTH;
+      const baseViewportY = pdfDimensions.baseHeight - ((pdfY + pdfHeight) * pdfDimensions.baseHeight / PDF_HEIGHT);
+      const baseViewportWidth = (pdfWidth * pdfDimensions.baseWidth) / PDF_WIDTH;
+      const baseViewportHeight = (pdfHeight * pdfDimensions.baseHeight) / PDF_HEIGHT;
+
+      // 현재 스케일에 맞춰 좌표 조정
+      const viewportX = baseViewportX * scale;
+      const viewportY = baseViewportY * scale;
+      const viewportWidth = baseViewportWidth * scale;
+      const viewportHeight = baseViewportHeight * scale;
+
+      console.log(`텍스트 아이템 #${index} 좌표 변환:`, {
+        text: item.text,
+        pdf: { 
+          x: pdfX, 
+          y: pdfY, 
+          width: pdfWidth, 
+          height: pdfHeight,
+          scale: [itemScaleX, itemScaleY]
+        },
+        baseViewport: {
+          x: baseViewportX,
+          y: baseViewportY,
+          width: baseViewportWidth,
+          height: baseViewportHeight
+        },
+        scaledViewport: { 
+          x: viewportX, 
+          y: viewportY, 
+          width: viewportWidth, 
+          height: viewportHeight 
+        },
+        scales: {
+          viewportToPDFScaleX,
+          viewportToPDFScaleY,
+          userScale: scale
+        }
+      });
+
+      // 텍스트 영역 확장 (여백 추가)
+      const padding = Math.min(viewportWidth, viewportHeight) * 0.2; // 20% 패딩
+      const expandedTextArea = {
+        left: viewportX - padding,
+        right: viewportX + viewportWidth + padding,
+        top: viewportY - padding,
+        bottom: viewportY + viewportHeight + padding
+      };
+
+      // 박스와 확장된 텍스트 영역의 겹침 확인
+      const isIntersecting = (
+        expandedTextArea.left < normalizedBoxArea.right &&
+        expandedTextArea.right > normalizedBoxArea.left &&
+        expandedTextArea.top < normalizedBoxArea.bottom &&
+        expandedTextArea.bottom > normalizedBoxArea.top
+      );
+
+      if (isIntersecting) {
+        // 겹치는 영역 계산
+        const intersection = {
+          left: Math.max(normalizedBoxArea.left, expandedTextArea.left),
+          right: Math.min(normalizedBoxArea.right, expandedTextArea.right),
+          top: Math.max(normalizedBoxArea.top, expandedTextArea.top),
+          bottom: Math.min(normalizedBoxArea.bottom, expandedTextArea.bottom)
+        };
+
+        const intersectionArea = 
+          (intersection.right - intersection.left) * 
+          (intersection.bottom - intersection.top);
+        
+        const textArea = 
+          (expandedTextArea.right - expandedTextArea.left) * 
+          (expandedTextArea.bottom - expandedTextArea.top);
+        
+        const overlapRatio = intersectionArea / textArea;
+
+        console.log(`텍스트 "${item.text}" 겹침 분석:`, {
+          intersection,
+          intersectionArea,
+          textArea,
+          overlapRatio,
+          isIncluded: overlapRatio > 0.2
         });
-        extractedText += item.text + ' ';
+
+        // 겹침 비율 임계값을 낮춤 (0.3 -> 0.2)
+        if (overlapRatio > 0.2) {
+          textItems.push({
+            text: item.text,
+            x: baseViewportX,  // 스케일 독립적인 좌표 저장
+            y: baseViewportY,
+            width: baseViewportWidth,
+            height: baseViewportHeight,
+            transform: item.transform
+          });
+        }
       }
     });
 
-    // 텍스트 위치를 y좌표 기준으로 정렬
+    // 텍스트 아이템을 위에서 아래로, 왼쪽에서 오른쪽으로 정렬
     textItems.sort((a, b) => {
+      const lineThreshold = Math.min(a.height, b.height) * scale;  // 스케일 적용
       const yDiff = Math.abs(a.y - b.y);
-      if (yDiff < 5) { // 같은 줄로 간주
-        return a.x - b.x;
+
+      if (yDiff <= lineThreshold) {
+        return a.x - b.x; // 같은 줄에서는 왼쪽에서 오른쪽으로
       }
-      return a.y - b.y;
+      return a.y - b.y; // 다른 줄은 위에서 아래로
     });
 
-    return {
-      text: extractedText.trim(),
-      textItems
-    };
-  }, [pageTextContents]);
+    // 정렬된 텍스트 조합
+    const extractedText = textItems
+      .map(item => item.text)
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    console.log('추출된 텍스트:', { 
+      text: extractedText, 
+      itemCount: textItems.length,
+      items: textItems.map(item => ({
+        text: item.text,
+        position: { 
+          x: item.x * scale,  // 현재 스케일에 맞춰 좌표 변환
+          y: item.y * scale 
+        }
+      }))
+    });
+
+    return { text: extractedText, textItems };
+  }, [pageTextContents, pdfDimensions, scale]);
 
   // 박스 추가 핸들러
   const handleAddBox = useCallback((box: Box) => {
@@ -287,15 +407,16 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
   // 박스 생성 핸들러
   const handleBoxCreated = useCallback((box: DrawingBox) => {
     if (!file || !activeLayer) return;
-    
-    const newBox: Box = {
-      id: `box_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`, // 고유한 ID 생성
+
+    // 박스 좌표 정규화
+    const normalizedBox: Box = {
+      id: `box_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
       layerId: activeLayer.id,
       pageNumber: box.pageNumber,
-      x: box.x,
-      y: box.y,
-      width: box.width,
-      height: box.height,
+      x: Math.min(box.x, box.x + box.width),
+      y: Math.min(box.y, box.y + box.height),
+      width: Math.abs(box.width),
+      height: Math.abs(box.height),
       type: 'box',
       color: activeLayer.color,
       text: '',
@@ -306,14 +427,16 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
       }
     };
 
-    // 박스 추가
-    handleAddBox(newBox);
+    // 텍스트 추출
+    const { text, textItems } = extractTextFromBox(box.pageNumber, normalizedBox);
+    normalizedBox.text = text;
+    normalizedBox.textItems = textItems;
+
+    handleAddBox(normalizedBox);
     setCurrentBox(null);
     setStartPoint(null);
-    
-    // 새로 생성된 박스 선택
-    setSelectedBox(newBox);
-  }, [file, activeLayer, handleAddBox, setSelectedBox]);
+    setSelectedBox(normalizedBox);
+  }, [file, activeLayer, handleAddBox, setSelectedBox, extractTextFromBox]);
 
   // 파일 업로드 처리
   const handleFileUpload = async (file: File) => {
@@ -449,19 +572,79 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
             renderTextLayer={true}
             renderAnnotationLayer={false}
             scale={scale}
+            loading={
+              <div className="w-full h-[500px] flex items-center justify-center">
+                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900"></div>
+              </div>
+            }
             onGetTextSuccess={(textContent) => {
-              const textItems = textContent.items.map((item: any) => ({
-                text: item.str,
-                x: item.transform[4],
-                y: item.transform[5],
-                width: item.width,
-                height: item.height,
-                transform: item.transform
-              }));
-              setPageTextContents(prev => ({
-                ...prev,
-                [pageNum]: textItems
-              }));
+              console.log('=== PDF Text Content Retrieved ===');
+              console.log('Raw Text Content:', {
+                pageNumber: pageNum,
+                itemCount: textContent.items.length,
+                rawItems: textContent.items
+              });
+
+              const textItems = textContent.items.map((item: any, index: number) => {
+                const [scaleX, skewX, skewY, scaleY, x, y] = item.transform;
+                
+                console.log(`Text Item #${index}:`, {
+                  text: item.str,
+                  originalTransform: item.transform,
+                  coordinates: {
+                    x: x,
+                    y: y,
+                    width: item.width,
+                    height: item.height
+                  },
+                  transformMatrix: {
+                    scaleX,
+                    skewX,
+                    skewY,
+                    scaleY,
+                    translateX: x,
+                    translateY: y
+                  },
+                  fontSize: item.fontSize,
+                  fontName: item.fontName
+                });
+
+                return {
+                  text: item.str,
+                  x: item.transform[4],
+                  y: item.transform[5],
+                  width: item.width,
+                  height: item.height,
+                  transform: item.transform
+                };
+              });
+
+              console.log('Processed Text Items:', {
+                pageNumber: pageNum,
+                processedItemCount: textItems.length,
+                items: textItems.map(item => ({
+                  text: item.text,
+                  position: {
+                    x: item.x,
+                    y: item.y,
+                    width: item.width,
+                    height: item.height
+                  }
+                }))
+              });
+
+              setPageTextContents(prev => {
+                const updated = {
+                  ...prev,
+                  [pageNum]: textItems
+                };
+                console.log('Updated Page Text Contents:', {
+                  pageNumber: pageNum,
+                  totalPages: Object.keys(updated).length,
+                  currentPageItemCount: textItems.length
+                });
+                return updated;
+              });
             }}
           />
           <style jsx global>{`
@@ -564,6 +747,7 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
   }, [toolState.isDrawMode, activeLayer, scale]);
 
   const handleCanvasMouseMove = useCallback((e: React.MouseEvent<HTMLDivElement>, pageNum: number) => {
+    console.log('handleCanvasMouseMove', e);
     if (!toolState.isDrawMode || !startPoint || !currentBox || !activeLayer) {
       console.log('MouseMove - Early return:', {
         toolState: toolState.isDrawMode,
@@ -603,7 +787,7 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
     }
   }, [toolState.isDrawMode, startPoint, currentBox, activeLayer, scale]);
 
-  // 박스 그리기 완료 및 텍스트 추출
+  // 박스 그리기 완료
   const handleCanvasMouseUp = useCallback(async (e: React.MouseEvent<HTMLDivElement>, pageNum: number) => {
     if (!toolState.isDrawMode || !startPoint || !currentBox || !activeLayer || !file) {
       return;
@@ -621,115 +805,20 @@ const PDFViewer: React.FC<PDFViewerProps> = ({
     
     const minSize = 10 / scale;
     if (width > minSize && height > minSize) {
-      try {
-        // 박스 영역 계산
-        const boxRect = {
-          left: Math.min(startPoint.x, x),
-          right: Math.max(startPoint.x, x),
-          top: Math.min(startPoint.y, y),
-          bottom: Math.max(startPoint.y, y)
-        };
-
-        // 현재 페이지의 저장된 텍스트 데이터 가져오기
-        const pageTextContent = pageTextContents[pageNum];
-        if (!pageTextContent) {
-          console.warn('페이지의 텍스트 데이터가 없습니다:', pageNum);
-          return;
-        }
-
-        // 박스 영역 내의 텍스트 필터링
-        let extractedText = '';
-        const textItems: TextItem[] = [];
-
-        pageTextContent.forEach(item => {
-          const itemX = item.x;
-          const itemY = item.y;
-          const itemWidth = item.width;
-          const itemHeight = item.height;
-
-          // 텍스트 아이템이 박스 영역과 겹치는지 확인
-          if (
-            itemX >= boxRect.left &&
-            itemX + itemWidth <= boxRect.right &&
-            itemY >= boxRect.top &&
-            itemY + itemHeight <= boxRect.bottom
-          ) {
-            textItems.push({
-              text: item.text,
-              x: itemX,
-              y: itemY,
-              width: itemWidth,
-              height: itemHeight,
-              transform: item.transform
-            });
-            extractedText += item.text + ' ';
-          }
-        });
-
-        // 텍스트 위치를 y좌표 기준으로 정렬
-        textItems.sort((a, b) => {
-          const yDiff = Math.abs(a.y - b.y);
-          if (yDiff < 5) { // 같은 줄로 간주
-            return a.x - b.x;
-          }
-          return a.y - b.y;
-        });
-
-        // 정렬된 순서로 텍스트 재구성
-        extractedText = textItems.map(item => item.text).join(' ');
-
-        const newBox: Box = {
-          id: `box_${Date.now()}`,
-          layerId: activeLayer.id,
-          pageNumber: pageNum,
-          x: boxRect.left,
-          y: boxRect.top,
-          width,
-          height,
-          type: 'box',
-          color: activeLayer.color,
-          text: extractedText.trim(),
-          textItems,  // 텍스트 아이템 정보 저장
-          metadata: {
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-            extractedAt: new Date().toISOString()
-          }
-        };
-
-        console.log('박스 생성:', {
-          box: newBox,
-          textItems,
-          extractedText: extractedText.trim()
-        });
-
-        handleBoxCreated(newBox);
-      } catch (error) {
-        console.error('텍스트 추출 중 오류 발생:', error);
-        // 에러가 발생해도 박스는 생성
-        const newBox: Box = {
-          id: `box_${Date.now()}`,
-          layerId: activeLayer.id,
-          pageNumber: pageNum,
-          x: Math.min(startPoint.x, x),
-          y: Math.min(startPoint.y, y),
-          width,
-          height,
-          type: 'box',
-          color: activeLayer.color,
-          text: '',
-          metadata: {
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString()
-          }
-        };
-        handleBoxCreated(newBox);
-      }
+      const newBox: DrawingBox = {
+        x: startPoint.x,
+        y: startPoint.y,
+        width: x - startPoint.x,
+        height: y - startPoint.y,
+        pageNumber: pageNum
+      };
+      
+      handleBoxCreated(newBox);
     }
 
     setStartPoint(null);
     setCurrentBox(null);
-  }, [toolState.isDrawMode, startPoint, currentBox, activeLayer, file, scale, handleBoxCreated, pageTextContents]);
+  }, [toolState.isDrawMode, startPoint, currentBox, activeLayer, file, scale, handleBoxCreated]);
 
   // 박스 삭제 핸들러 수정
   const handleRemoveBox = useCallback((boxId: string) => {

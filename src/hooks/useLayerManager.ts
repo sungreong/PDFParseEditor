@@ -154,7 +154,7 @@ export function useLayerManager() {
   // 박스 추가
   const addBox = useCallback((documentId: string, box: Partial<Box> & { pageNumber: number }) => {
     if (!activeLayer) return null;
-
+    console.log('useLayerManage_addBox', box);
     const newBox: Box = {
       id: `box_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
       layerId: activeLayer.id,

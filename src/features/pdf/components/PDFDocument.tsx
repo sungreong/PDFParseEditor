@@ -39,6 +39,7 @@ const PDFDocument: React.FC<PDFDocumentProps> = ({
         className="shadow-lg"
         renderTextLayer={isTextSelectable}
         renderAnnotationLayer={true}
+        
       />
       {/* 여기에 박스, 화살표 등의 오버레이 요소 추가 */}
     </div>
