@@ -1,6 +1,6 @@
 import { useState, useCallback } from 'react';
 import { v4 as uuidv4 } from 'uuid';
-import type { Box as BoxType, DocumentPageData, TextItem } from '@/types';
+import type { Box as BoxType, DocumentPageData, TextItem, Connection } from '@/types';
 import type { Layer as BaseLayer } from '../types';
 
 export interface Box extends BoxType {
@@ -38,6 +38,7 @@ interface PageData {
     layerId: string;
     canvasRef: HTMLCanvasElement | null;
   }[];
+  connections: Connection[];
 }
 
 interface DocumentState {
@@ -99,7 +100,8 @@ export const useLayerManager = () => {
         canvases: prev.layers.map(layer => ({
           layerId: layer.id,
           canvasRef: null
-        }))
+        })),
+        connections: []
       };
 
       return {
@@ -209,7 +211,8 @@ export const useLayerManager = () => {
         canvases: prev.layers.map(layer => ({
           layerId: layer.id,
           canvasRef: null
-        }))
+        })),
+        connections: []
       };
 
       // 현재 레이어의 boxes와 boxesByPage 업데이트
@@ -351,6 +354,7 @@ export const useLayerManager = () => {
           canvasRef: canvasRefs[`${documentId}_${pageNumber}_${layer.id}`] || null,
         })),
         groupBoxes: [],
+        connections: []
       };
     }
 
@@ -375,6 +379,10 @@ export const useLayerManager = () => {
       boxes: pageBoxes.filter((box: Box) => box.layerId === layer.id)
     }));
 
+    // 현재 페이지의 연결선 정보 가져오기
+    const connections = pageData.connections || [];
+    console.log(`Page ${pageNumber} connections:`, connections.length);
+
     return {
       layers: layersWithPageBoxes,
       boxes: pageBoxes,
@@ -383,6 +391,7 @@ export const useLayerManager = () => {
         canvasRef: canvasRefs[`${documentId}_${pageNumber}_${layer.id}`] || null,
       })),
       groupBoxes: [],
+      connections: connections
     };
   }, [state.layersByDocument, state.layers, canvasRefs]);
 
@@ -487,16 +496,98 @@ export const useLayerManager = () => {
   const exportLayer = useCallback((layerId: string) => {
     const layer = state.layers.find(l => l.id === layerId);
     if (layer) {
-      const layerData = JSON.stringify(layer);
-      const blob = new Blob([layerData], { type: 'application/json' });
+      // 페이지별 데이터 수집
+      const pagesData = Object.entries(state.layersByDocument).reduce((acc, [documentId, documentData]) => {
+        Object.entries(documentData).forEach(([pageNumber, pageData]) => {
+          const pageNum = parseInt(pageNumber);
+          
+          // 현재 레이어의 박스들 필터링
+          const boxes = pageData.boxes.filter(box => box.layerId === layerId);
+          // 현재 레이어와 관련된 연결선들 필터링
+          console.log(pageData);
+          const connections = (pageData.connections || []).filter(conn => 
+            conn.layerId === layerId || 
+            boxes.some(box => box.id === conn.startBox.id) || 
+            boxes.some(box => box.id === conn.endBox.id)
+          );
+
+          console.log(`Page ${pageNum} - Boxes: ${boxes.length}, Connections: ${connections.length}`);
+
+          if (!acc[pageNum]) {
+            acc[pageNum] = {
+              pageNumber: pageNum,
+              boxes: [],
+              connections: []
+            };
+          }
+
+          acc[pageNum].boxes.push(...boxes);
+          acc[pageNum].connections.push(...connections);
+        });
+        return acc;
+      }, {} as Record<number, { pageNumber: number; boxes: Box[]; connections: Connection[] }>);
+
+      const exportData = {
+        layer: {
+          id: layer.id,
+          name: layer.name,
+          color: layer.color,
+          isVisible: layer.isVisible
+        },
+        pages: Object.entries(pagesData)
+          .sort(([pageA], [pageB]) => parseInt(pageA) - parseInt(pageB))
+          .map(([pageNum, data]) => ({
+            pageNumber: parseInt(pageNum),
+            boxes: data.boxes,
+            connections: data.connections.map(conn => ({
+              id: conn.id,
+              startBoxId: conn.startBox.id,
+              endBoxId: conn.endBox.id,
+              type: conn.type,
+              layerId: conn.layerId,
+              startBox: conn.startBox,
+              endBox: conn.endBox
+            }))
+          })),
+        metadata: {
+          totalPages: Object.keys(pagesData).length,
+          totalBoxes: Object.values(pagesData).reduce((sum, data) => sum + data.boxes.length, 0),
+          totalConnections: Object.values(pagesData).reduce((sum, data) => sum + data.connections.length, 0),
+          exportDate: new Date().toISOString()
+        }
+      };
+
+      console.log('Export summary:', {
+        totalPages: exportData.metadata.totalPages,
+        totalBoxes: exportData.metadata.totalBoxes,
+        totalConnections: exportData.metadata.totalConnections,
+        pageDetails: Object.entries(pagesData).map(([pageNum, data]) => ({
+          page: pageNum,
+          boxes: data.boxes.length,
+          connections: data.connections.length
+        }))
+      });
+
+      const layerData = JSON.stringify(exportData, (key, value) => {
+        if (typeof value === 'number' && !Number.isInteger(value)) {
+          return Number(value.toFixed(2));
+        }
+        return value;
+      }, 4);
+
+      const blob = new Blob([layerData], { 
+        type: 'application/json;charset=utf-8' 
+      });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `${layer.name}.json`;
+      a.download = `${layer.name}_data.json`;
+      document.body.appendChild(a);
       a.click();
+      document.body.removeChild(a);
       URL.revokeObjectURL(url);
     }
-  }, [state.layers]);
+  }, [state.layers, state.layersByDocument]);
 
   const importLayer = useCallback((layerData: string) => {
     try {
@@ -532,6 +623,57 @@ export const useLayerManager = () => {
     };
   }, [generateBoxId]);
 
+  const addConnection = useCallback((documentId: string, connection: Connection) => {
+    setState(prev => {
+      const pageNumber = connection.startBox.pageNumber;
+      const pageKey = pageNumber.toString();
+      const documentData = prev.layersByDocument[documentId] || {};
+      const pageData = documentData[pageKey] || {
+        boxes: [],
+        canvases: [],
+        connections: []
+      };
+
+      return {
+        ...prev,
+        layersByDocument: {
+          ...prev.layersByDocument,
+          [documentId]: {
+            ...documentData,
+            [pageKey]: {
+              ...pageData,
+              connections: [...(pageData.connections || []), connection]
+            }
+          }
+        }
+      };
+    });
+  }, []);
+
+  const removeConnection = useCallback((documentId: string, connectionId: string, pageNumber: number) => {
+    setState(prev => {
+      const pageKey = pageNumber.toString();
+      const documentData = prev.layersByDocument[documentId] || {};
+      const pageData = documentData[pageKey];
+
+      if (!pageData) return prev;
+
+      return {
+        ...prev,
+        layersByDocument: {
+          ...prev.layersByDocument,
+          [documentId]: {
+            ...documentData,
+            [pageKey]: {
+              ...pageData,
+              connections: (pageData.connections || []).filter(conn => conn.id !== connectionId)
+            }
+          }
+        }
+      };
+    });
+  }, []);
+
   return {
     layers: state.layers,
     activeLayer: state.activeLayer,
@@ -561,5 +703,7 @@ export const useLayerManager = () => {
     importLayer,
     duplicateBox,
     generateBoxId,
+    addConnection,
+    removeConnection,
   };
 }; 

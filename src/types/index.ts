@@ -103,8 +103,12 @@ export interface GroupBox {
 export interface DocumentPageData {
   layers: Layer[];
   boxes: Box[];
-  canvases: Canvas[];
+  canvases: {
+    layerId: string;
+    canvasRef: HTMLCanvasElement | null;
+  }[];
   groupBoxes: GroupBox[];
+  connections: Connection[];
 }
 
 export type PDFDocument = PDFDocumentProxy; 

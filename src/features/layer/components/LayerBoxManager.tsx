@@ -222,97 +222,6 @@ export const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
     });
   }, [allBoxes, selectedPage, searchTerm, textLengthFilter, sortBy]);
 
-  // JSON 다운로드 함수
-  const handleDownloadJSON = useCallback(() => {
-    // 모든 페이지의 데이터 수집
-    const allPagesData = Array.from({ length: numPages }, (_, i) => i + 1).map(pageNum => {
-      const pageData = getPageData(documentName, pageNum);
-      if (!pageData) return null;
-
-      // 현재 레이어의 박스만 필터링
-      const boxes = pageData.boxes.filter(box => box.layerId === layer?.id);
-      
-      return {
-        pageNumber: pageNum,
-        boxes: boxes.map(box => ({
-          ...box,
-          pageWidth: 800, // PDF 기본 너비
-          pageHeight: 1131, // PDF 기본 높이 (A4 비율)
-        }))
-      };
-    }).filter(Boolean);
-
-    // JSON 데이터 구성
-    const jsonData = {
-      documentName,
-      layer: {
-        id: layer?.id,
-        name: layer?.name,
-        color: layer?.color
-      },
-      pages: allPagesData,
-      metadata: {
-        totalPages: numPages,
-        totalBoxes: allPagesData.reduce((sum, page) => sum + (page?.boxes.length || 0), 0),
-        exportDate: new Date().toISOString(),
-        defaultPageWidth: 800,
-        defaultPageHeight: 1131
-      }
-    };
-
-    // JSON 파일 생성 및 다운로드
-    const blob = new Blob([JSON.stringify(jsonData, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${documentName}_${layer?.name}_boxes.json`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  }, [documentName, layer?.id, numPages, getPageData]);
-
-  // JSON 파일 업로드 처리 함수
-  const handleUploadJSON = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      try {
-        const jsonData = JSON.parse(e.target?.result as string);
-        
-        // pages 배열에서 모든 boxes를 추출
-        const uploadedBoxes: Box[] = [];
-        if (Array.isArray(jsonData.pages)) {
-          jsonData.pages.forEach((page: any) => {
-            if (Array.isArray(page.boxes)) {
-              const boxesWithLayerId = page.boxes.map((box: any) => ({
-                ...box,
-                layerId: layer?.id  // 현재 레이어 ID로 설정
-              }));
-              uploadedBoxes.push(...boxesWithLayerId);
-            }
-          });
-        }
-
-        if (uploadedBoxes.length > 0) {
-          onBoxesUpload(uploadedBoxes);
-          alert(`${uploadedBoxes.length}개의 박스를 성공적으로 업로드했습니다.`);
-        } else {
-          alert('업로드할 박스를 찾을 수 없습니다.');
-        }
-      } catch (error) {
-        alert('JSON 파일 처리 중 오류가 발생했습니다.');
-        console.error('JSON 파싱 오류:', error);
-      }
-    };
-    reader.readAsText(file);
-    
-    // 파일 입력 초기화
-    event.target.value = '';
-  }, [layer?.id, onBoxesUpload]);
-
   const handleMouseDown = (e: React.MouseEvent) => {
     setIsResizing(true);
     setStartPos({ x: e.clientX, y: e.clientY });
@@ -366,35 +275,6 @@ export const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
     }
   };
 
-  const handleSelectBoxesInArea = (selectionArea: { x: number; y: number; width: number; height: number }) => {
-    const currentPage = selectedPage || 1;
-    const pageData = getPageData(documentName, currentPage);
-    if (!pageData) return;
-
-    const boxesInArea = pageData.boxes.filter(box => {
-      const isOverlapping = (
-        box.x < (selectionArea.x + selectionArea.width) &&
-        (box.x + box.width) > selectionArea.x &&
-        box.y < (selectionArea.y + selectionArea.height) &&
-        (box.y + box.height) > selectionArea.y
-      );
-
-      if (isOverlapping) {
-        const overlapX = Math.min(box.x + box.width, selectionArea.x + selectionArea.width) - Math.max(box.x, selectionArea.x);
-        const overlapY = Math.min(box.y + box.height, selectionArea.y + selectionArea.height) - Math.max(box.y, selectionArea.y);
-        const overlapArea = overlapX * overlapY;
-        const boxArea = box.width * box.height;
-        return overlapArea > boxArea * 0.3;
-      }
-      return false;
-    });
-
-    setSelectedBoxIds(prev => {
-      const newSet = new Set(prev);
-      boxesInArea.forEach(box => newSet.add(box.id));
-      return newSet;
-    });
-  };
 
   const handleDeleteSelected = () => {
     if (selectedBoxIds.size === 0) return;
@@ -405,35 +285,6 @@ export const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
       });
       setSelectedBoxIds(new Set());
     }
-  };
-
-  // 박스 중앙 좌표 계산 함수
-  const getBoxCenter = (box: Box) => {
-    return {
-      x: box.x + box.width / 2,
-      y: box.y + box.height / 2
-    };
-  };
-
-  // 박스 클릭 핸들러 수정
-  const handleBoxClick = (e: React.MouseEvent, box: Box) => {
-    e.preventDefault();
-    e.stopPropagation();
-
-    if (isDrawingArrow) {
-      if (!startBox) {
-        setStartBox(box);
-      } else if (startBox.id !== box.id) {
-        // 연결선 생성
-        onConnectionAdd(startBox, box);
-        setStartBox(null);
-        onToggleArrowDrawing();
-      }
-      return;
-    }
-
-    // 항상 다중 선택 모드로 동작
-    handleBoxSelect(box.id);
   };
 
   // 박스 수정 핸들러 수정
@@ -843,165 +694,6 @@ export const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
     </div>
   );
 
-  // 그룹 생성 핸들러 수정
-  const handleCreateGroup = () => {
-    const selected = selectedBoxes || [];
-    if (selected.length < 2) {
-      alert('그룹을 만들려면 2개 이상의 박스를 선택해야 합니다.');
-      return;
-    }
-
-    const groupName = prompt('그룹 이름을 입력하세요:');
-    if (!groupName) return;
-
-    // layer가 없으면 그룹 생성 불가
-    if (!layer) {
-      alert('레이어가 선택되지 않았습니다.');
-      return;
-    }
-
-    // 현재 페이지 번호 가져오기
-    const currentPage = selected[0].pageNumber;
-
-    // 선택된 박스들의 정보 수집
-    const selectedBoxesInfo = selected.map(box => ({
-      id: box.id,
-      x: box.x,
-      y: box.y,
-      width: box.width,
-      height: box.height,
-      text: box.text,
-      layerId: box.layerId,
-      pageNumber: box.pageNumber
-    }));
-
-    // 그룹의 범위 계산
-    const minX = Math.min(...selectedBoxesInfo.map(box => box.x));
-    const minY = Math.min(...selectedBoxesInfo.map(box => box.y));
-    const maxX = Math.max(...selectedBoxesInfo.map(box => box.x + box.width));
-    const maxY = Math.max(...selectedBoxesInfo.map(box => box.y + box.height));
-
-    // 그룹 생성
-    const groupId = `group_${Date.now()}`;
-    const newGroup: GroupBox = {
-      id: groupId,
-      name: groupName,
-      layerId: layer.id,
-      pageNumber: currentPage,
-      color: `#${Math.floor(Math.random()*16777215).toString(16)}`, // 랜덤 색상
-      boxIds: selectedBoxesInfo.map(box => box.id),
-      bounds: {
-        x: minX,
-        y: minY,
-        width: maxX - minX,
-        height: maxY - minY
-      },
-      createdAt: Date.now()
-    };
-
-    // 그룹 박스 생성
-    createGroupBox(documentName, currentPage, groupId, newGroup);
-
-    // 선택 초기화
-    onBoxesSelect([]);
-    onMultiSelectModeChange(false);
-
-    // 그룹 목록 보기로 전환
-    setShowGroupTable(true);
-  };
-
-  // 그룹 테이블 렌더링 수정
-  const renderGroupTable = () => {
-    const currentPage = selectedPage || 1;
-    const pageData = getPageData(documentName, currentPage);
-    if (!pageData) return null;
-
-    const groups = pageData.groupBoxes || [];
-
-    return (
-      <div className="flex flex-col h-full bg-white rounded-lg shadow-sm">
-        <div className="flex items-center justify-between gap-2 p-3 border-b bg-gray-50">
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full">
-              {groups.length}개의 그룹
-            </span>
-          </div>
-          {/* 필요한 경우 여기에 그룹 관련 액션 버튼 추가 */}
-        </div>
-        <div className="flex-1 overflow-auto">
-          <table className="min-w-full divide-y divide-gray-200">
-            <thead className="bg-gray-50">
-              <tr>
-                <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">이름</th>
-                <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">박스 수</th>
-                <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">범위</th>
-                <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">생성일</th>
-                <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">작업</th>
-              </tr>
-            </thead>
-            <tbody className="bg-white divide-y divide-gray-200">
-              {groups.map((group) => {
-                const groupBoxes = getGroupBoxes(documentName, currentPage, group.id);
-                return (
-                  <tr key={group.id} className="hover:bg-gray-50 transition-colors">
-                    <td className="px-3 py-2 whitespace-nowrap">
-                      <div className="flex items-center gap-2">
-                        <div
-                          className="w-3 h-3 rounded-full shadow-sm"
-                          style={{ backgroundColor: group.color }}
-                        />
-                        <span className="text-sm text-gray-900">{group.name}</span>
-                      </div>
-                    </td>
-                    <td className="px-3 py-2 whitespace-nowrap text-sm text-gray-500">
-                      {groupBoxes.length}개
-                    </td>
-                    <td className="px-3 py-2 whitespace-nowrap text-sm text-gray-500">
-                      {group.bounds ? (
-                        <span>
-                          {Math.round(group.bounds.width)}×{Math.round(group.bounds.height)}
-                        </span>
-                      ) : ''}
-                    </td>
-                    <td className="px-3 py-2 whitespace-nowrap text-sm text-gray-500">
-                      {new Date(group.createdAt).toLocaleString()}
-                    </td>
-                    <td className="px-3 py-2 whitespace-nowrap text-right text-sm font-medium">
-                      <button
-                        onClick={() => {
-                          const newName = prompt('새 그룹 이름을 입력하세요:', group.name);
-                          if (newName) {
-                            updateGroupBox(documentName, currentPage, group.id, {
-                              ...group,
-                              name: newName
-                            });
-                          }
-                        }}
-                        className="text-blue-600 hover:text-blue-900 text-xs mr-2"
-                      >
-                        수정
-                      </button>
-                      <button
-                        onClick={() => {
-                          if (window.confirm('이 그룹을 삭제하시겠습니까?')) {
-                            removeGroupBox(documentName, currentPage, group.id);
-                          }
-                        }}
-                        className="text-red-600 hover:text-red-900 text-xs"
-                      >
-                        삭제
-                      </button>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    );
-  };
-
   // 연결선 표시/숨김 상태를 관리하는 상태 추가
   const [hiddenEdges, setHiddenEdges] = useState<Set<string>>(new Set());
 
@@ -1045,17 +737,6 @@ export const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
     return !hiddenEdges.has(edgeId);
   }, [hiddenEdges]);
 
-  // 드래그 핸들러
-  const handleDragStart = (e: React.MouseEvent) => {
-    if (dragRef.current) {
-      setIsDragging(true);
-      const rect = dragRef.current.getBoundingClientRect();
-      setDragPosition({
-        x: e.clientX - rect.left,
-        y: e.clientY - rect.top
-      });
-    }
-  };
 
   const handleDragMove = useCallback((e: MouseEvent) => {
     if (isDragging && dragRef.current) {
@@ -1144,32 +825,6 @@ export const LayerBoxManager: React.FC<LayerBoxManagerProps> = ({
       console.error('레이어 복제 중 오류 발생:', error);
     }
   };
-
-  // 박스 생성 핸들러 수정
-  const handleCreateBox = useCallback((pageNumber: number, x: number, y: number, width: number, height: number) => {
-    const newBox: Box = {
-      id: generateBoxId(),
-      layerId: activeLayer?.id || '',
-      pageNumber,
-      x,
-      y,
-      width,
-      height,
-      type: 'box',
-      color: activeLayer?.color || '#000000',
-      text: '',
-      textItems: [],
-      metadata: {
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-        extractedAt: new Date().toISOString()
-      }
-    };
-
-    addBox(newBox);
-    return newBox;
-  }, [activeLayer, generateBoxId, addBox]);
-
   // 툴바 렌더링 수정
   const renderToolbar = () => (
     <div className="flex flex-col gap-3 p-4 border-b border-gray-200 bg-white sticky top-0 z-10 shadow-sm">
